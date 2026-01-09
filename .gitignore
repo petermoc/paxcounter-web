@@ -1,0 +1,15 @@
+## Visual Studio
+.vs/
+bin/
+obj/
+
+## ASP.NET
+appsettings.Development.json
+
+## SQLite
+*.db
+*.db-shm
+*.db-wal
+
+## Logs
+*.log

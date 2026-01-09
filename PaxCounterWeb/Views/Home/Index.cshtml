@@ -1,0 +1,38 @@
+﻿@{
+    ViewData["Title"] = "Home Page";
+}
+
+@model IEnumerable<Device>
+
+<a class="btn btn-primary" href="/Simulate/Generate">
+    Generate sample
+</a>
+
+
+<h2>Devices</h2>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Device</th>
+            <th>Last Seen</th>
+            <th>Samples</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var d in Model)
+        {
+            <tr>
+                <td>@d.DeviceId</td>
+                <td>@d.PaxSamples.OrderByDescending(x => x.Timestamp).FirstOrDefault()?.Timestamp</td>
+                <td>@d.PaxSamples.Count</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+
+@* <div class="text-center">
+    <h1 class="display-1">Welcome</h1>
+    <p>Test test test</p>
+</div> *@

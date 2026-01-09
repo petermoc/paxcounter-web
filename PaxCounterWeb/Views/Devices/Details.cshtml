@@ -1,0 +1,64 @@
+﻿@model PaxCounterWeb.ViewModels.DeviceDetailsViewModel
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+
+<div id="map" style="height: 500px; margin-bottom: 20px;"></div>
+
+
+
+<h2>@Model.Name</h2>
+
+<p>
+    Device ID: @Model.DeviceId <br />
+    Samples count: @Model.TotalSamples
+</p>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>WiFi</th>
+            <th>BLE</th>
+            <th>RSSI</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var s in Model.Samples)
+        {
+            <tr>
+                <td>@s.Timestamp.ToLocalTime()</td>
+                <td>@s.WifiCount</td>
+                <td>@s.BleCount</td>
+                <td>@s.RssiLimit</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+
+<script>
+    const map = L.map('map').setView([@Model.Latitude, @Model.Longitude], 17);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    fetch('/Devices/HeatmapData/@Model.Id')
+        .then(res => res.json())
+        .then(data => {
+            const heatData = data.map(p => [
+                p.lat,
+                p.lon,
+                p.intensity
+            ]);
+
+            L.heatLayer(heatData, {
+                radius: 25,
+                blur: 15,
+                maxZoom: 17
+            }).addTo(map);
+        });
+</script>

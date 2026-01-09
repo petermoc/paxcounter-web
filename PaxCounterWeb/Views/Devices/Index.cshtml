@@ -1,0 +1,22 @@
+﻿@model IEnumerable<PaxCounterWeb.Models.Device>
+
+<h2>PaxCounter devices</h2>
+
+<form asp-action="GenerateSample" method="post">
+    <button type="submit">Generate sample</button>
+</form>
+
+<ul>
+    @foreach (var d in Model)
+    {
+        <li>
+            <strong>@d.Name</strong> (@d.Id)
+            <br />
+            Samples: @(d.PaxSamples?.Count ?? 0)
+        </li>
+    }
+</ul>
+
+
+<a hhref="http://localhost:5283/Devices/Details/1">Details</a>
+<a hhref="http://localhost:5283/Devices/HeatmapData/1">/Devices/HeatmapData/1</a>
