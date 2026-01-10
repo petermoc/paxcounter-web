@@ -5,16 +5,17 @@ namespace PaxCounterWeb.Controllers;
 
 public class DebugController : Controller
 {
-    private readonly PaxSimulatorService _sim;
+    private readonly PaxSimulatorService _simulator;
 
-    public DebugController(PaxSimulatorService sim)
+    public DebugController(PaxSimulatorService simulator)
     {
-        _sim = sim;
+        _simulator = simulator;
     }
 
-    public async Task<IActionResult> Generate()
+    [HttpPost]
+    public async Task<IActionResult> GenerateSample(int deviceId)
     {
-        await _sim.GenerateSampleAsync();
-        return Content("Sample generated");
+        await _simulator.GenerateSampleAsync(deviceId);
+        return RedirectToAction("Details", "Devices", new { id = deviceId });
     }
 }

@@ -1,20 +1,41 @@
 ﻿@model PaxCounterWeb.ViewModels.DeviceDetailsViewModel
-<link rel="stylesheet"
-      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
-
-<div id="map" style="height: 500px; margin-bottom: 20px;"></div>
-
-
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
 <h2>@Model.Name</h2>
+
+<div id="map" style="height: 300px; margin-bottom: 20px;"></div>
+
+
+<form asp-action="GenerateSampleForDevice"
+      asp-controller="Devices"
+      method="post"
+      style="margin-bottom: 15px;">
+
+    <input type="hidden" name="deviceId" value="@Model.DeviceId" />
+
+    <button type="submit" class="btn btn-primary">
+        ➕ Generate sample
+    </button>
+</form>
+
+<br />
+
+<button class="btn btn-primary"
+        onclick="generateSample(@Model.DeviceId)">
+    Generate sample
+</button>
+
+<br />
+<br />
 
 <p>
     Device ID: @Model.DeviceId <br />
     Samples count: @Model.TotalSamples
 </p>
+
+<h3>Traffic over time</h3>
+<canvas id="trafficChart" width="400" height="200"></canvas>
 
 <table class="table">
     <thead>
@@ -26,39 +47,181 @@
         </tr>
     </thead>
     <tbody>
-        @foreach (var s in Model.Samples)
+        @{
+            var i = 1;
+        }
+        @foreach (var s in Model.SamplesDesc.OrderByDescending(s => s.Timestamp))
         {
             <tr>
+                <td>@i</td>
                 <td>@s.Timestamp.ToLocalTime()</td>
                 <td>@s.WifiCount</td>
                 <td>@s.BleCount</td>
                 <td>@s.RssiLimit</td>
             </tr>
+            i++;
         }
     </tbody>
 </table>
 
+<form asp-controller="Devices"
+      asp-action="GenerateSample"
+      method="post"
+      style="margin-bottom: 15px;">
 
-<script>
-    const map = L.map('map').setView([@Model.Latitude, @Model.Longitude], 17);
+    <input type="hidden" name="deviceId" value="@Model.DeviceId" />
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '© OpenStreetMap'
-    }).addTo(map);
+    <button type="submit" class="btn btn-primary">
+        Generate sample
+    </button>
+</form>
 
-    fetch('/Devices/HeatmapData/@Model.Id')
-        .then(res => res.json())
-        .then(data => {
-            const heatData = data.map(p => [
-                p.lat,
-                p.lon,
-                p.intensity
-            ]);
 
-            L.heatLayer(heatData, {
-                radius: 25,
-                blur: 15,
-                maxZoom: 17
-            }).addTo(map);
+
+@section Scripts {
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <script>
+        // ---------- MAP ----------
+        const map = L.map('map').setView([46.0569, 14.5058], 14);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+
+        fetch('/Devices/HeatmapData/@Model.DeviceId')
+            .then(res => res.json())
+            .then(data => {
+                const heatData = data.map(p => [p.lat, p.lon, p.intensity]);
+                L.heatLayer(heatData, { radius: 25, blur: 15, maxZoom: 17 }).addTo(map);
+            });
+
+        // ---------- CHART ----------
+        const labels = @Html.Raw(Json.Serialize(Model.SamplesAsc.Select(s => s.Timestamp.ToString("HH:mm:ss"))));
+        const wifiData = @Html.Raw(Json.Serialize(Model.SamplesAsc.Select(s => s.WifiCount)));
+        const bleData  = @Html.Raw(Json.Serialize(Model.SamplesAsc.Select(s => s.BleCount)));
+        const rssiLimits = @Html.Raw(Json.Serialize(Model.SamplesAsc.Select(s => s.RssiLimit)));
+
+        function rssiToColor(rssi) {
+            switch (rssi) {
+                case -65: return 'rgba(255, 0, 0, 0.9)';   // zelo blizu
+                case -75: return 'rgba(255, 165, 0, 0.9)'; // bližina
+                case -85: return 'rgba(0, 128, 255, 0.9)'; // širše
+                case -95: return 'rgba(160, 160, 160, 0.7)'; // zelo široko
+                case 0:
+                case 100:
+                default: return 'rgba(0, 0, 0, 0.5)';      // off
+            }
+        }
+
+
+        const chartCtx = document.getElementById('trafficChart').getContext('2d');
+
+        const chart = new Chart(chartCtx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'WiFi',
+                        data: wifiData,
+                        borderWidth: 2,
+                        tension: 0.3,
+
+                        // barva točk po RLIM
+                        pointBackgroundColor: (c) => rssiToColor(rssiLimits[c.dataIndex]),
+                        pointBorderColor: (c) => rssiToColor(rssiLimits[c.dataIndex]),
+
+                        // barva segmentov po RLIM (da se "linija" obarva med točkami)
+                        segment: {
+                            borderColor: (c) => rssiToColor(rssiLimits[c.p1DataIndex])
+                        }
+                    },
+                    {
+                        label: 'BLE',
+                        data: bleData,
+                        borderWidth: 2,
+                        tension: 0.3,
+
+                        pointBackgroundColor: (c) => rssiToColor(rssiLimits[c.dataIndex]),
+                        pointBorderColor: (c) => rssiToColor(rssiLimits[c.dataIndex]),
+                        segment: {
+                            borderColor: (c) => rssiToColor(rssiLimits[c.p1DataIndex])
+                        }
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'top' }
+                },
+                scales: {
+                    y: { beginAtZero: true }
+                }
+            }
         });
-</script>
+    </script>
+
+
+    <script>
+        async function generateSample(deviceId) {
+            const res = await fetch('/Devices/GenerateSampleAjax', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: 'deviceId=' + deviceId
+            });
+
+            const data = await res.json();
+
+            // 1️⃣ Dodaj vrstico v tabelo
+            const table = document.querySelector('#samplesTable tbody');
+            const row = table.insertRow(0);
+
+            row.innerHTML = `
+                <td>${data.time}</td>
+                <td>${data.wifi}</td>
+                <td>${data.ble}</td>
+                <td>${data.rssi}</td>
+            `;
+
+            // 2️⃣ (kasneje) posodobi graf
+            // chart.data.labels.push(data.time)
+            // chart.update()
+        }
+    </script>
+
+    <script>
+        document.getElementById('generateSampleBtn')
+            .addEventListener('click', async function () {
+
+                const deviceId = this.dataset.deviceId;
+
+                const response = await fetch('/Devices/GenerateSampleAjax', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ deviceId: deviceId })
+                });
+
+                if (!response.ok) {
+                    alert('Error generating sample');
+                    return;
+                }
+
+                // 🔁 tukaj kasneje osvežimo samo dele strani
+                console.log('Sample generated');
+            });
+    </script>
+
+
+}

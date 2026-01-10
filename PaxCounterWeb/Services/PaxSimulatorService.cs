@@ -1,4 +1,5 @@
-﻿using PaxCounterWeb.Data.PaxCounterWeb.Data;
+﻿using Microsoft.EntityFrameworkCore;
+using PaxCounterWeb.Data.PaxCounterWeb.Data;
 using PaxCounterWeb.Models;
 
 
@@ -14,20 +15,28 @@ public class PaxSimulatorService
         _db = db;
     }
 
-    public async Task GenerateSampleAsync()
+    //int[] rssiLevels = { -65, -75, -85, -95 };
+
+    public async Task GenerateSampleAsync(int deviceId)
     {
-        var device = _db.Devices.First();
+        var device = await _db.Devices.FindAsync(deviceId);
+        if (device == null) return;
+
+        var rssiLevels = new[] { -65, -75, -85, -95 };
+        var rssi = rssiLevels[_rnd.Next(rssiLevels.Length)];
 
         var sample = new PaxSample
         {
-            DeviceId = device.Id,
+            DeviceId = deviceId,
             Timestamp = DateTime.UtcNow,
             WifiCount = _rnd.Next(0, 5),
             BleCount = _rnd.Next(5, 20),
-            RssiLimit = -65
+            RssiLimit = rssi
         };
 
         _db.PaxSamples.Add(sample);
         await _db.SaveChangesAsync();
     }
+
+
 }

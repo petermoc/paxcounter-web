@@ -4,10 +4,22 @@
 
 @model IEnumerable<Device>
 
-<a class="btn btn-primary" href="/Simulate/Generate">
-    Generate sample
-</a>
+<form asp-controller="Devices"
+      asp-action="GenerateSample"
+      asp-route-deviceId="1"
+      method="post"
+      class="d-inline">
+    <button type="submit" class="btn btn-primary btn-sm">
+        ➕ Generate sample
+    </button>
+</form>
 
+<br />
+<br />
+
+<a href="http://localhost:5283/Devices/Details/1">Odpri napravo #1 (Details)</a>
+<br />
+<br />
 
 <h2>Devices</h2>
 

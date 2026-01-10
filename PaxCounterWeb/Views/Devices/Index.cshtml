@@ -2,9 +2,19 @@
 
 <h2>PaxCounter devices</h2>
 
-<form asp-action="GenerateSample" method="post">
+<form asp-controller="Devices"
+      asp-action="GenerateSample"
+      asp-route-deviceId="1"
+      method="post">
     <button type="submit">Generate sample</button>
 </form>
+
+<br />
+<br />
+
+<a href="http://localhost:5283/Devices/Details/1">Odpri napravo #1 (Details)</a>
+
+<br />
 
 <ul>
     @foreach (var d in Model)
@@ -16,6 +26,9 @@
         </li>
     }
 </ul>
+
+<a href="http://localhost:5283/Devices/Details/1">Odpri napravo #1 (Details)</a>
+
 
 
 <a hhref="http://localhost:5283/Devices/Details/1">Details</a>
