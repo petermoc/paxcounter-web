@@ -22,8 +22,8 @@ public class DevicesController : Controller
     public async Task<IActionResult> Index()
     {
         var devices = await _db.Devices
+            .Where(d => !d.IsHidden)
             .Include(d => d.PaxSamples)
-
             .ToListAsync();
 
         return View(devices);
@@ -49,6 +49,7 @@ public class DevicesController : Controller
     //}
 
 
+    //tabela dogodkov
     public async Task<IActionResult> Details(int id)
     {
         var device = await _db.Devices
@@ -117,6 +118,14 @@ public class DevicesController : Controller
     }
 
     [HttpPost]
+    public async Task<IActionResult> GenerateSample(int deviceId)
+    {
+        await _simulator.GenerateSampleAsync(deviceId);
+        return Ok();
+    }
+
+
+    /*[HttpPost]
     public async Task<IActionResult> GenerateSampleAjax(int deviceId)
     {
         await _simulator.GenerateSampleAsync(deviceId);
@@ -126,18 +135,46 @@ public class DevicesController : Controller
             .OrderByDescending(p => p.Timestamp)
             .FirstAsync();
 
-        /*return Json(new
+        *//*return Json(new
         {
             time = latest.Timestamp.ToLocalTime().ToString("HH:mm:ss"),
             wifi = latest.WifiCount,
             ble = latest.BleCount,
             rssi = latest.RssiLimit
-        });*/
+        });*//*
         return Ok(new { success = true });
+    }*/
+
+
+    [HttpGet]
+    public async Task<IActionResult> LatestSamples(int deviceId)
+    {
+        var samples = await _db.PaxSamples
+            .Where(p => p.DeviceId == deviceId)
+            .OrderByDescending(p => p.Timestamp)
+            .Take(10)
+            .ToListAsync();
+
+        return PartialView("_SamplesTable", samples);
     }
 
+    public IActionResult SamplesTable(int deviceId)
+    {
+        var samples = _db.PaxSamples
+            .Where(p => p.DeviceId == deviceId)
+            .OrderByDescending(p => p.Timestamp)
+            .Take(10)
+            .Select(p => new PaxSampleViewModel
+            {
+                Timestamp = p.Timestamp,
+                WifiCount = p.WifiCount,
+                BleCount = p.BleCount,
+                RssiLimit = p.RssiLimit
+            })
+            .ToList();
 
-
+        return PartialView("_SamplesTable", samples);
+    }
 
 
 

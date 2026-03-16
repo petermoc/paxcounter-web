@@ -1,0 +1,205 @@
+@model PaxCounterWeb.ViewModels.ComparePageViewModel
+@{
+    ViewData["Title"] = "Compare Devices";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">Device Compare</h2>
+    <a class="btn btn-outline-secondary btn-sm" href="/">Back</a>
+</div>
+
+<style>
+    .compare-chart-wrap {
+        position: relative;
+        height: 38vh;
+        min-height: 260px;
+    }
+
+    @@media (max-width: 768px) {
+        .compare-chart-wrap {
+            height: 44vh;
+            min-height: 300px;
+        }
+    }
+</style>
+
+<div class="card mb-3">
+    <div class="card-body">
+        <div class="row g-2 mb-3">
+            <div class="col-6 col-lg-3">
+                <label for="minutesSelect" class="form-label mb-1">Period</label>
+                <select id="minutesSelect" class="form-select form-select-sm">
+                    <option value="60">Last 1h</option>
+                    <option value="180" selected>Last 3h</option>
+                    <option value="360">Last 6h</option>
+                    <option value="720">Last 12h</option>
+                    <option value="1440">Last 24h</option>
+                    <option value="43200">Last 30d</option>
+                </select>
+            </div>
+            <div class="col-6 col-lg-3">
+                <label for="bucketSelect" class="form-label mb-1">Resolution</label>
+                <select id="bucketSelect" class="form-select form-select-sm">
+                    <option value="1">1 min</option>
+                    <option value="5" selected>5 min</option>
+                    <option value="10">10 min</option>
+                    <option value="15">15 min</option>
+                    <option value="30">30 min</option>
+                    <option value="60">60 min</option>
+                </select>
+            </div>
+            <div class="col-12 col-lg-6 d-flex align-items-end">
+                <small id="rangeInfo" class="text-muted"></small>
+            </div>
+        </div>
+
+        <label class="form-label mb-1">Devices</label>
+        <div class="row g-1 mb-3">
+            @foreach (var id in Model.DeviceIds)
+            {
+                <div class="col-12 col-md-6 col-lg-4">
+                    <div class="form-check">
+                        <input class="form-check-input device-check" type="checkbox" id="device_@id" value="@id" checked>
+                        <label class="form-check-label" for="device_@id">@id</label>
+                    </div>
+                </div>
+            }
+        </div>
+
+        <h5 class="mb-2">BLE Avg Overlay</h5>
+        <div class="compare-chart-wrap">
+            <canvas id="bleAvgChart"></canvas>
+        </div>
+        <hr />
+        <h5 class="mb-2">BLE Max Overlay</h5>
+        <div class="compare-chart-wrap">
+            <canvas id="bleMaxChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const minutesSelect = document.getElementById("minutesSelect");
+    const bucketSelect = document.getElementById("bucketSelect");
+    const rangeInfo = document.getElementById("rangeInfo");
+    let bleAvgChart = null;
+    let bleMaxChart = null;
+
+    const palette = [
+        "#1f77b4", "#d62728", "#2ca02c", "#ff7f0e", "#9467bd",
+        "#17becf", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22"
+    ];
+
+    function selectedDevices() {
+        return Array.from(document.querySelectorAll(".device-check:checked")).map(x => x.value);
+    }
+
+    function makeColor(index) {
+        return palette[index % palette.length];
+    }
+
+    function toLocalLabel(utcIso) {
+        return new Date(utcIso).toLocaleTimeString();
+    }
+
+    function buildDatasets(seriesByDevice, allBuckets, selector) {
+        const deviceIds = Object.keys(seriesByDevice).sort((a, b) => a.localeCompare(b));
+        return deviceIds.map((deviceId, idx) => {
+            const color = makeColor(idx);
+            const perBucket = seriesByDevice[deviceId];
+            return {
+                label: deviceId,
+                data: allBuckets.map(b => perBucket[b] ?? null),
+                borderColor: color,
+                backgroundColor: color + "33",
+                tension: 0.2,
+                spanGaps: true
+            };
+        });
+    }
+
+    function ensureChart(canvasId, title) {
+        const ctx = document.getElementById(canvasId);
+        return new Chart(ctx, {
+            type: "line",
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: "index", intersect: false },
+                plugins: { title: { display: false, text: title } },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: "BLE count" } }
+                }
+            }
+        });
+    }
+
+    async function fetchMetrics(deviceId, minutes, bucketMinutes) {
+        const url = `/api/metrics/ble?deviceId=${encodeURIComponent(deviceId)}&minutes=${minutes}&bucketMinutes=${bucketMinutes}`;
+        const resp = await fetch(url, { cache: "no-store" });
+        if (!resp.ok) return null;
+        return await resp.json();
+    }
+
+    async function refreshCompare() {
+        const devices = selectedDevices();
+        const minutes = Number(minutesSelect.value || 180);
+        const bucketMinutes = Number(bucketSelect.value || 5);
+
+        if (devices.length === 0) {
+            rangeInfo.textContent = "Select at least one device.";
+            if (bleAvgChart) { bleAvgChart.data.labels = []; bleAvgChart.data.datasets = []; bleAvgChart.update(); }
+            if (bleMaxChart) { bleMaxChart.data.labels = []; bleMaxChart.data.datasets = []; bleMaxChart.update(); }
+            return;
+        }
+
+        const all = await Promise.all(devices.map(d => fetchMetrics(d, minutes, bucketMinutes)));
+        const valid = all.filter(x => x && x.points && x.points.length > 0);
+        if (valid.length === 0) {
+            rangeInfo.textContent = "No data in selected window.";
+            return;
+        }
+
+        const allBuckets = Array.from(new Set(valid.flatMap(x => x.points.map(p => p.bucketUtc))))
+            .sort((a, b) => a.localeCompare(b));
+
+        const avgSeriesByDevice = {};
+        const maxSeriesByDevice = {};
+        valid.forEach(x => {
+            const avgMap = {};
+            const maxMap = {};
+            x.points.forEach(p => {
+                avgMap[p.bucketUtc] = p.bleAvg;
+                maxMap[p.bucketUtc] = p.bleMax;
+            });
+            avgSeriesByDevice[x.deviceId] = avgMap;
+            maxSeriesByDevice[x.deviceId] = maxMap;
+        });
+
+        const labels = allBuckets.map(toLocalLabel);
+        const avgDatasets = buildDatasets(avgSeriesByDevice, allBuckets);
+        const maxDatasets = buildDatasets(maxSeriesByDevice, allBuckets);
+
+        if (!bleAvgChart) bleAvgChart = ensureChart("bleAvgChart", "BLE Avg Overlay");
+        if (!bleMaxChart) bleMaxChart = ensureChart("bleMaxChart", "BLE Max Overlay");
+
+        bleAvgChart.data.labels = labels;
+        bleAvgChart.data.datasets = avgDatasets;
+        bleAvgChart.update();
+
+        bleMaxChart.data.labels = labels;
+        bleMaxChart.data.datasets = maxDatasets;
+        bleMaxChart.update();
+
+        rangeInfo.textContent = `Devices: ${Object.keys(avgSeriesByDevice).length} | Window: ${minutes} min | Bucket: ${bucketMinutes} min | Points: ${allBuckets.length}`;
+    }
+
+    document.querySelectorAll(".device-check").forEach(x => x.addEventListener("change", refreshCompare));
+    minutesSelect.addEventListener("change", refreshCompare);
+    bucketSelect.addEventListener("change", refreshCompare);
+
+    refreshCompare();
+    setInterval(refreshCompare, 10000);
+</script>

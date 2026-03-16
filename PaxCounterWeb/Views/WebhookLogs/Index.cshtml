@@ -1,0 +1,36 @@
+@model IReadOnlyList<PaxCounterWeb.Services.WebhookLogEntry>
+
+@{
+    ViewData["Title"] = "Webhook Logs";
+    var sloveniaTz = TimeZoneInfo.FindSystemTimeZoneById("Central European Standard Time");
+}
+
+<h2>Webhook Logs</h2>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Time (Local)</th>
+            <th>Status</th>
+            <th>Event</th>
+            <th>Device</th>
+            <th>DevEUI</th>
+            <th>Message</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var e in Model)
+        {
+            var localTime = TimeZoneInfo.ConvertTimeFromUtc(e.TimestampUtc, sloveniaTz);
+            var tzLabel = sloveniaTz.IsDaylightSavingTime(localTime) ? "CEST" : "CET";
+            <tr>
+                <td>@localTime.ToString("yyyy-MM-dd HH:mm:ss") @tzLabel</td>
+                <td>@e.Status</td>
+                <td>@e.EventName</td>
+                <td>@e.DeviceId</td>
+                <td>@e.DevEui</td>
+                <td>@e.Message</td>
+            </tr>
+        }
+    </tbody>
+</table>

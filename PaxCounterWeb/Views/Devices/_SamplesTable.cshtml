@@ -1,0 +1,25 @@
+﻿@* @model List<PaxCounterWeb.Models.PaxSample> *@
+@model List<PaxCounterWeb.ViewModels.PaxSampleViewModel>
+
+
+<table class="table table-sm">
+    <thead>
+        <tr>
+            <th>Time</th>
+            <th>WiFi</th>
+            <th>BLE</th>
+            <th>RSSI</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var s in Model)
+        {
+            <tr>
+                <td>@s.Timestamp.ToLocalTime()</td>
+                <td>@s.WifiCount</td>
+                <td>@s.BleCount</td>
+                <td>@s.RssiLimit</td>
+            </tr>
+        }
+    </tbody>
+</table>

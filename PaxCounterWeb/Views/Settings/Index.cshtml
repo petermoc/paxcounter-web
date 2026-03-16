@@ -1,0 +1,36 @@
+@model PaxCounterWeb.ViewModels.DisplaySettingsViewModel
+@using PaxCounterWeb.Models
+
+@{
+    ViewData["Title"] = "Settings";
+}
+
+<h2>Display Settings</h2>
+
+@if (TempData["SettingsSaved"] is string msg)
+{
+    <div class="alert alert-success py-2">@msg</div>
+}
+
+<form method="post" asp-controller="Settings" asp-action="Index" class="card p-3">
+    @Html.AntiForgeryToken()
+    <div class="mb-2 fw-semibold">GPS coordinate format</div>
+    <div class="form-check">
+        <input class="form-check-input" type="radio" asp-for="GpsMode" value="@GpsDisplayMode.Decimal" id="gpsModeDecimal" />
+        <label class="form-check-label" for="gpsModeDecimal">Decimal only (46.090642)</label>
+    </div>
+    <div class="form-check">
+        <input class="form-check-input" type="radio" asp-for="GpsMode" value="@GpsDisplayMode.Dms" id="gpsModeDms" />
+        <label class="form-check-label" for="gpsModeDms">DMS only (46°05'26.3"N)</label>
+    </div>
+    <div class="form-check mb-3">
+        <input class="form-check-input" type="radio" asp-for="GpsMode" value="@GpsDisplayMode.Both" id="gpsModeBoth" />
+        <label class="form-check-label" for="gpsModeBoth">Both (decimal + DMS)</label>
+    </div>
+
+    <div>
+        <button type="submit" class="btn btn-primary">Save</button>
+        <a class="btn btn-outline-secondary" href="/">Back</a>
+    </div>
+</form>
+

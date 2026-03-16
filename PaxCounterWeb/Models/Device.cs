@@ -9,6 +9,7 @@ public class Device
     public string Location { get; set; } = "";
     public double Latitude { get; set; }
     public double Longitude { get; set; }
+    public bool IsHidden { get; set; }
 
     public ICollection<PaxSample> PaxSamples { get; set; } = new List<PaxSample>();
 }

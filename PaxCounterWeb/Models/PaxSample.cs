@@ -15,6 +15,14 @@ public class PaxSample
     public int BleCount { get; set; }
 
     public int RssiLimit { get; set; }
+    public int? BatteryVoltageMv { get; set; }
+    public double? BatteryPercent { get; set; }
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    public int? Satellites { get; set; }
+    public double? Hdop { get; set; }
+    public int? Altitude { get; set; }
+    public string? SourceChannel { get; set; }
 
     // Navigation property
     public ICollection<RssiSample> RssiSamples { get; set; } = new List<RssiSample>();
@@ -30,5 +38,13 @@ public class PaxSampleEntity
     public int WifiCount { get; set; }
     public int BleCount { get; set; }
     public int RssiLimit { get; set; }
+    public int? BatteryVoltageMv { get; set; }
+    public double? BatteryPercent { get; set; }
+    public double? Latitude { get; set; }
+    public double? Longitude { get; set; }
+    public int? Satellites { get; set; }
+    public double? Hdop { get; set; }
+    public int? Altitude { get; set; }
+    public string? SourceChannel { get; set; }
     public DateTime Timestamp { get; set; }
 }

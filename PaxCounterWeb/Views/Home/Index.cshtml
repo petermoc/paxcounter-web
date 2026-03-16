@@ -1,27 +1,272 @@
-﻿@{
+@{
     ViewData["Title"] = "Home Page";
 }
 
-@model IEnumerable<Device>
+@using PaxCounterWeb.Services
+@model PaxCounterWeb.ViewModels.HomeViewModel
 
-<form asp-controller="Devices"
-      asp-action="GenerateSample"
-      asp-route-deviceId="1"
+<h2>Live Uplinks</h2>
+
+<form asp-controller="Home"
+      asp-action="SimulateUplink"
       method="post"
       class="d-inline">
-    <button type="submit" class="btn btn-primary btn-sm">
-        ➕ Generate sample
+    @Html.AntiForgeryToken()
+    <button type="submit" class="btn btn-secondary btn-sm">
+        Simulate uplink
     </button>
 </form>
 
-<br />
-<br />
+<a class="btn btn-link btn-sm" href="/WebhookLogs">Webhook logs</a>
 
-<a href="http://localhost:5283/Devices/Details/1">Odpri napravo #1 (Details)</a>
 <br />
 <br />
+@if (TempData["CommandStatus"] is string commandStatus)
+{
+    <div class="alert alert-success py-2 command-alert">@commandStatus</div>
+}
+@if (TempData["CommandError"] is string commandError)
+{
+    <div class="alert alert-warning py-2 command-alert">@commandError</div>
+}
+
+@{
+    var sloveniaTz = TimeZoneInfo.FindSystemTimeZoneById("Central European Standard Time");
+    var gpsMode = Model.GpsDisplayMode;
+    string FormatRelativeTime(DateTime utcTime)
+    {
+        var now = DateTime.UtcNow;
+        var delta = now - utcTime;
+        if (delta.TotalSeconds < 0)
+        {
+            delta = TimeSpan.Zero;
+        }
+
+        if (delta.TotalSeconds < 60)
+            return $"pred {(int)delta.TotalSeconds}s";
+        if (delta.TotalMinutes < 60)
+            return $"pred {(int)delta.TotalMinutes} min";
+        if (delta.TotalHours < 24)
+            return $"pred {(int)delta.TotalHours} h";
+        return $"pred {(int)delta.TotalDays} d";
+    }
+
+    string FormatLat(double? lat) => GpsCoordinateFormatter.FormatLatitude(lat, gpsMode);
+    string FormatLon(double? lon) => GpsCoordinateFormatter.FormatLongitude(lon, gpsMode);
+}
+
+<div aria-live="polite" aria-atomic="true" class="position-fixed top-0 end-0 p-3" style="z-index: 1080;">
+    <div id="otaToastContainer" class="toast-container"></div>
+</div>
+
+<form method="get" asp-controller="Home" asp-action="Index" class="row g-2 align-items-end mb-3">
+    <div class="col-12 col-md-3">
+        <label class="form-label mb-1" for="historyMinutes">Period</label>
+        <select id="historyMinutes" name="historyMinutes" class="form-select form-select-sm">
+            @if (Model.HistoryMinutes == 60) { <option value="60" selected>Last 1h</option> } else { <option value="60">Last 1h</option> }
+            @if (Model.HistoryMinutes == 180) { <option value="180" selected>Last 3h</option> } else { <option value="180">Last 3h</option> }
+            @if (Model.HistoryMinutes == 720) { <option value="720" selected>Last 12h</option> } else { <option value="720">Last 12h</option> }
+            @if (Model.HistoryMinutes == 1440) { <option value="1440" selected>Last 24h</option> } else { <option value="1440">Last 24h</option> }
+            @if (Model.HistoryMinutes == 10080) { <option value="10080" selected>Last 7d</option> } else { <option value="10080">Last 7d</option> }
+            @if (Model.HistoryMinutes == 43200) { <option value="43200" selected>Last 30d</option> } else { <option value="43200">Last 30d</option> }
+        </select>
+    </div>
+    <div class="col-12 col-md-5">
+        <label class="form-label mb-1" for="historyDeviceId">Device</label>
+        <select id="historyDeviceId" name="historyDeviceId" class="form-select form-select-sm">
+            <option value="">All devices</option>
+            @foreach (var d in Model.HistoryAvailableDeviceIds)
+            {
+                if (string.Equals(Model.HistoryDeviceId, d, StringComparison.OrdinalIgnoreCase))
+                {
+                    <option value="@d" selected>@d</option>
+                }
+                else
+                {
+                    <option value="@d">@d</option>
+                }
+            }
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <label class="form-label mb-1" for="historyChannelFilter">Channel</label>
+        <select id="historyChannelFilter" name="historyChannelFilter" class="form-select form-select-sm">
+            @if (string.IsNullOrWhiteSpace(Model.HistoryChannelFilter)) { <option value="" selected>All channels</option> } else { <option value="">All channels</option> }
+            @if (string.Equals(Model.HistoryChannelFilter, "wifi", StringComparison.OrdinalIgnoreCase)) { <option value="wifi" selected>WiFi only</option> } else { <option value="wifi">WiFi only</option> }
+            @if (string.Equals(Model.HistoryChannelFilter, "lora", StringComparison.OrdinalIgnoreCase)) { <option value="lora" selected>LoRa only</option> } else { <option value="lora">LoRa only</option> }
+            @if (string.Equals(Model.HistoryChannelFilter, "gps", StringComparison.OrdinalIgnoreCase)) { <option value="gps" selected>GPS related</option> } else { <option value="gps">GPS related</option> }
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <label class="form-label mb-1" for="pageSize">Rows</label>
+        <select id="pageSize" name="pageSize" class="form-select form-select-sm">
+            @if (Model.PageSize == 10) { <option value="10" selected>10</option> } else { <option value="10">10</option> }
+            @if (Model.PageSize == 100) { <option value="100" selected>100</option> } else { <option value="100">100</option> }
+            @if (Model.PageSize == 200) { <option value="200" selected>200</option> } else { <option value="200">200</option> }
+        </select>
+    </div>
+    <div class="col-12 col-md-2">
+        <div class="form-check mt-4 pt-1">
+            <input class="form-check-input" type="checkbox" id="pendingOnly" name="pendingOnly" value="true" @(Model.PendingOnly ? "checked" : "")>
+            <label class="form-check-label" for="pendingOnly">Pending only</label>
+        </div>
+        <div class="form-check mt-2">
+            <input class="form-check-input" type="checkbox" id="showHidden" name="showHidden" value="true" @(Model.ShowHidden ? "checked" : "")>
+            <label class="form-check-label" for="showHidden">Show hidden devices</label>
+        </div>
+    </div>
+    <div class="col-12 col-md-2">
+        <button type="submit" class="btn btn-primary btn-sm w-100">Apply</button>
+    </div>
+</form>
+
+<div class="text-muted small mb-2">
+    Showing @Model.LiveSamples.Count rows out of @Model.HistoryTotalInWindow in selected window. Page @Model.Page.
+</div>
+
+<table class="table">
+    <thead>
+        <tr>
+            <th>Time (Local)</th>
+            <th>Age</th>
+            <th>Device</th>
+            <th>WiFi</th>
+            <th>BLE</th>
+            <th>RLIM</th>
+            <th>Battery (mV)</th>
+            <th>Battery (%)</th>
+            <th>Lat</th>
+            <th>Lon</th>
+            <th>Sats</th>
+            <th>HDOP</th>
+            <th>Alt</th>
+            <th>Channel</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var s in Model.LiveSamples)
+        {
+            var utc = DateTime.SpecifyKind(s.Timestamp, DateTimeKind.Utc);
+            var localTime = TimeZoneInfo.ConvertTimeFromUtc(utc, sloveniaTz);
+            var tzLabel = sloveniaTz.IsDaylightSavingTime(localTime) ? "CEST" : "CET";
+            <tr>
+                <td>@localTime.ToString("yyyy-MM-dd HH:mm:ss") @tzLabel</td>
+                <td>@FormatRelativeTime(utc)</td>
+                <td>@(string.IsNullOrWhiteSpace(s.DeviceName) ? s.DeviceId : s.DeviceName)</td>
+                <td>@s.WifiCount</td>
+                <td>@s.BleCount</td>
+                <td>@s.RssiLimit</td>
+                <td>@(s.BatteryVoltageMv?.ToString() ?? "-")</td>
+                <td>@(s.BatteryPercent?.ToString("0.0") ?? "-")</td>
+                <td>@FormatLat(s.Latitude)</td>
+                <td>@FormatLon(s.Longitude)</td>
+                <td>@(s.Satellites?.ToString() ?? "-")</td>
+                <td>@(s.Hdop?.ToString("0.00") ?? "-")</td>
+                <td>@(s.Altitude?.ToString() ?? "-")</td>
+                <td>@(string.IsNullOrWhiteSpace(s.SourceChannel) ? "-" : s.SourceChannel)</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@{
+    var currentPage = Model.Page + 1;
+    var totalPages = Math.Max(1, Model.TotalPages);
+    var startPage = Math.Max(1, currentPage - 2);
+    var endPage = Math.Min(totalPages, startPage + 4);
+    startPage = Math.Max(1, endPage - 4);
+}
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mt-3 mb-2">
+    <div class="btn-group btn-group-sm" role="group" aria-label="Quick size">
+        <a class="btn @(Model.PageSize == 10 && Model.Page == 0 ? "btn-primary" : "btn-outline-primary")"
+           href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = 0, pageSize = 10, showHidden = Model.ShowHidden })">
+            Last 10
+        </a>
+        <a class="btn @(Model.PageSize == 100 && Model.Page == 0 ? "btn-primary" : "btn-outline-primary")"
+           href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = 0, pageSize = 100, showHidden = Model.ShowHidden })">
+            Last 100
+        </a>
+        <a class="btn @(Model.PageSize == 200 && Model.Page == 0 ? "btn-primary" : "btn-outline-primary")"
+           href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = 0, pageSize = 200, showHidden = Model.ShowHidden })">
+            Last 200
+        </a>
+    </div>
+
+    <div class="btn-group btn-group-sm" role="group" aria-label="Paging">
+        @if (Model.HasPreviousPage)
+        {
+            <a class="btn btn-outline-secondary"
+               href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = Model.Page - 1, pageSize = Model.PageSize, showHidden = Model.ShowHidden })">
+                Previous page
+            </a>
+        }
+        else
+        {
+            <button type="button" class="btn btn-outline-secondary" disabled>Previous page</button>
+        }
+
+        <button type="button" class="btn btn-light" disabled>Page @(Model.Page + 1) / @Model.TotalPages</button>
+
+        @if (Model.HasNextPage)
+        {
+            <a class="btn btn-outline-secondary"
+               href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = Model.Page + 1, pageSize = Model.PageSize, showHidden = Model.ShowHidden })">
+                Next page
+            </a>
+        }
+        else
+        {
+            <button type="button" class="btn btn-outline-secondary" disabled>Next page</button>
+        }
+    </div>
+
+    <div class="btn-group btn-group-sm" role="group" aria-label="Page numbers">
+        @if (startPage > 1)
+        {
+            <a class="btn btn-outline-primary"
+               href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = 0, pageSize = Model.PageSize, showHidden = Model.ShowHidden })">1</a>
+            @if (startPage > 2)
+            {
+                <button type="button" class="btn btn-outline-secondary" disabled>...</button>
+            }
+        }
+
+        @for (var p = startPage; p <= endPage; p++)
+        {
+            var zeroBased = p - 1;
+            if (p == currentPage)
+            {
+                <button type="button" class="btn btn-primary" disabled>@p</button>
+            }
+            else
+            {
+                <a class="btn btn-outline-primary"
+                   href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = zeroBased, pageSize = Model.PageSize, showHidden = Model.ShowHidden })">@p</a>
+            }
+        }
+
+        @if (endPage < totalPages)
+        {
+            @if (endPage < totalPages - 1)
+            {
+                <button type="button" class="btn btn-outline-secondary" disabled>...</button>
+            }
+            <a class="btn btn-outline-primary"
+               href="@Url.Action("Index", new { historyMinutes = Model.HistoryMinutes, historyDeviceId = Model.HistoryDeviceId, historyChannelFilter = Model.HistoryChannelFilter, page = totalPages - 1, pageSize = Model.PageSize, showHidden = Model.ShowHidden })">@totalPages</a>
+        }
+    </div>
+</div>
 
 <h2>Devices</h2>
+
+<form asp-controller="Home" asp-action="SetReportingIntervalForAll" method="post" class="d-flex flex-wrap gap-1 mb-3">
+    @Html.AntiForgeryToken()
+    <span class="me-2 align-self-center small text-muted">Set all pax interval:</span>
+    <button type="submit" name="seconds" value="10" class="btn btn-outline-primary btn-sm">All 10s</button>
+    <button type="submit" name="seconds" value="30" class="btn btn-outline-primary btn-sm">All 30s</button>
+    <button type="submit" name="seconds" value="60" class="btn btn-outline-primary btn-sm">All 60s</button>
+    <button type="submit" name="seconds" value="120" class="btn btn-outline-primary btn-sm">All 120s</button>
+</form>
 
 <table class="table">
     <thead>
@@ -29,22 +274,298 @@
             <th>Device</th>
             <th>Last Seen</th>
             <th>Samples</th>
+            <th>Last Lat</th>
+            <th>Last Lon</th>
+            <th>Map</th>
+            <th>BLE Summary</th>
+            <th>Live</th>
+            <th>Interval OTA</th>
+            <th>Command status</th>
+            <th>Cancel</th>
+            <th>Visibility</th>
         </tr>
     </thead>
     <tbody>
-        @foreach (var d in Model)
+        @foreach (var d in Model.Devices)
         {
-            <tr>
-                <td>@d.DeviceId</td>
-                <td>@d.PaxSamples.OrderByDescending(x => x.Timestamp).FirstOrDefault()?.Timestamp</td>
+            var rowClass = d.IsHidden ? "table-warning" : string.Empty;
+            var lastUtc = d.PaxSamples.OrderByDescending(x => x.Timestamp).FirstOrDefault()?.Timestamp;
+            string lastLocal = "-";
+            string lastAge = "-";
+            string lastLat = "-";
+            string lastLon = "-";
+            string mapUrl = "";
+            if (lastUtc.HasValue)
+            {
+                var utc = DateTime.SpecifyKind(lastUtc.Value, DateTimeKind.Utc);
+                var localTime = TimeZoneInfo.ConvertTimeFromUtc(utc, sloveniaTz);
+                var tzLabel = sloveniaTz.IsDaylightSavingTime(localTime) ? "CEST" : "CET";
+                lastLocal = $"{localTime:yyyy-MM-dd HH:mm:ss} {tzLabel}";
+                lastAge = FormatRelativeTime(utc);
+            }
+            var lastGps = d.PaxSamples
+                .Where(x => x.Latitude.HasValue && x.Longitude.HasValue)
+                .OrderByDescending(x => x.Timestamp)
+                .FirstOrDefault();
+            if (lastGps != null)
+            {
+                lastLat = FormatLat(lastGps.Latitude);
+                lastLon = FormatLon(lastGps.Longitude);
+                mapUrl = $"https://maps.google.com/?q={lastGps.Latitude},{lastGps.Longitude}";
+            }
+            var bleSummary = Model.DeviceBleSummaries.TryGetValue(d.Id, out var ble) ? ble : null;
+            <tr data-device-id="@d.Id" class="@rowClass">
+                <td>
+                    @d.DeviceId
+                    @if (d.IsHidden)
+                    {
+                        <span class="badge bg-warning text-dark ms-2">Hidden</span>
+                    }
+                </td>
+                <td>@lastLocal</td>
+                <td>@lastAge</td>
                 <td>@d.PaxSamples.Count</td>
+                <td>@lastLat</td>
+                <td>@lastLon</td>
+                <td>
+                    @if (!string.IsNullOrEmpty(mapUrl))
+                    {
+                        <a class="btn btn-link btn-sm" href="@mapUrl" target="_blank" rel="noopener">Open map</a>
+                    }
+                    else
+                    {
+                        <span>-</span>
+                    }
+                </td>
+                <td>
+                    @if (bleSummary != null)
+                    {
+                        <div><strong>Now:</strong> @bleSummary.LatestBle</div>
+                        <div><strong>Max 5m:</strong> @bleSummary.RecentMaxBle5m</div>
+                        <div><strong>Avg 5m:</strong> @bleSummary.RecentAvgBle5m.ToString("0.0")</div>
+                        @if (bleSummary.LastNonZeroBle.HasValue && bleSummary.LastNonZeroAtUtc.HasValue)
+                        {
+                            var nonZeroUtc = DateTime.SpecifyKind(bleSummary.LastNonZeroAtUtc.Value, DateTimeKind.Utc);
+                            <div><strong>Last non-zero:</strong> @bleSummary.LastNonZeroBle.Value (@FormatRelativeTime(nonZeroUtc))</div>
+                        }
+                        else
+                        {
+                            <div class="text-muted small">No non-zero BLE yet</div>
+                        }
+                    }
+                    else
+                    {
+                        <span>-</span>
+                    }
+                </td>
+                <td>
+                    <a class="btn btn-primary btn-sm" href="/live/@d.DeviceId">Open live</a>
+                </td>
+                <td>
+                    <form asp-controller="Home" asp-action="SetReportingInterval" method="post" class="d-flex flex-wrap gap-1">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="deviceEntityId" value="@d.Id" />
+                        <button type="submit" name="seconds" value="10" class="btn btn-outline-secondary btn-sm">10s</button>
+                        <button type="submit" name="seconds" value="30" class="btn btn-outline-secondary btn-sm">30s</button>
+                        <button type="submit" name="seconds" value="60" class="btn btn-outline-secondary btn-sm">60s</button>
+                        <button type="submit" name="seconds" value="120" class="btn btn-outline-secondary btn-sm">120s</button>
+                    </form>
+                </td>
+                <td>
+                    @if (Model.DeviceCommandStatuses.TryGetValue(d.Id, out var deviceCommandStatus))
+                    {
+                        <span class="badge device-command-badge @deviceCommandStatus.BadgeClass" data-device-id="@d.Id">@deviceCommandStatus.Text</span>
+                    }
+                    else
+                    {
+                        <span class="text-muted small device-command-badge" data-device-id="@d.Id">-</span>
+                    }
+                </td>
+                <td>
+                    <div class="device-cancel-slot" data-device-id="@d.Id">
+                        @if (Model.DeviceCommandStatuses.TryGetValue(d.Id, out var cancelStatus) && cancelStatus.CanCancel)
+                        {
+                            <form asp-controller="Home" asp-action="CancelPendingCommand" method="post">
+                                @Html.AntiForgeryToken()
+                                <input type="hidden" name="deviceEntityId" value="@d.Id" />
+                                <button type="submit" class="btn btn-outline-danger btn-sm">Cancel</button>
+                            </form>
+                        }
+                        else
+                        {
+                            <span class="text-muted small">-</span>
+                        }
+                    </div>
+                </td>
+                <td>
+                    <form asp-controller="Home" asp-action="ToggleDeviceHidden" method="post">
+                        @Html.AntiForgeryToken()
+                        <input type="hidden" name="deviceEntityId" value="@d.Id" />
+                        <input type="hidden" name="hide" value="@(!d.IsHidden)" />
+                        <input type="hidden" name="showHidden" value="@Model.ShowHidden" />
+                        <button type="submit" class="btn @(d.IsHidden ? "btn-outline-success" : "btn-outline-warning") btn-sm">
+                            @(d.IsHidden ? "Unhide" : "Hide")
+                        </button>
+                    </form>
+                </td>
             </tr>
         }
     </tbody>
 </table>
 
+<h3 class="mt-4">Recent OTA Commands</h3>
+<div class="table-responsive">
+    <table class="table table-sm align-middle" id="otaHistoryTable">
+        <thead>
+            <tr>
+                <th>Device</th>
+                <th>Requested</th>
+                <th>Status</th>
+                <th>Transport</th>
+                <th>Updated</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in Model.RecentDeviceCommands)
+            {
+                var updatedUtc = item.UpdatedAtUtc ?? item.CreatedAtUtc;
+                var updatedLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(updatedUtc, DateTimeKind.Utc), sloveniaTz);
+                var updatedLabel = sloveniaTz.IsDaylightSavingTime(updatedLocal) ? "CEST" : "CET";
+                <tr data-command-id="@item.Id">
+                    <td>@(string.IsNullOrWhiteSpace(item.DeviceName) ? item.DeviceId : item.DeviceName)</td>
+                    <td>@item.RequestedSeconds s</td>
+                    <td><span class="badge @item.BadgeClass">@item.Text</span></td>
+                    <td>@item.RequestedTransport</td>
+                    <td>@updatedLocal.ToString("yyyy-MM-dd HH:mm:ss") @updatedLabel</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
 
-@* <div class="text-center">
-    <h1 class="display-1">Welcome</h1>
-    <p>Test test test</p>
-</div> *@
+<script>
+    (() => {
+        const pollUrl = '/api/commands/status';
+        const pollMs = 5000;
+        const statusCache = new Map();
+        const toastContainer = document.getElementById('otaToastContainer');
+        const historyTableBody = document.querySelector('#otaHistoryTable tbody');
+
+        document.querySelectorAll('.device-command-badge[data-device-id]').forEach((el) => {
+            const id = el.dataset.deviceId;
+            statusCache.set(id, el.textContent.trim());
+        });
+
+        document.querySelectorAll('.command-alert').forEach((alertEl) => {
+            showToast(alertEl.textContent.trim(), alertEl.classList.contains('alert-warning') ? 'warning' : 'success');
+        });
+
+        function escapeHtml(value) {
+            return (value ?? '')
+                .toString()
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function showToast(message, tone) {
+            if (!toastContainer || !message) {
+                return;
+            }
+
+            const toastEl = document.createElement('div');
+            toastEl.className = `toast align-items-center border-0 text-bg-${tone === 'warning' ? 'warning' : 'success'} mb-2`;
+            toastEl.setAttribute('role', 'alert');
+            toastEl.setAttribute('aria-live', 'assertive');
+            toastEl.setAttribute('aria-atomic', 'true');
+            toastEl.innerHTML = `
+                <div class="d-flex">
+                    <div class="toast-body">${escapeHtml(message)}</div>
+                    <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+                </div>`;
+            toastContainer.appendChild(toastEl);
+            const toast = new bootstrap.Toast(toastEl, { delay: 4500 });
+            toast.show();
+            toastEl.addEventListener('hidden.bs.toast', () => toastEl.remove());
+        }
+
+        function renderCancelSlot(deviceId, canCancel) {
+            const slot = document.querySelector(`.device-cancel-slot[data-device-id="${deviceId}"]`);
+            if (!slot) {
+                return;
+            }
+
+            if (!canCancel) {
+                slot.innerHTML = '<span class="text-muted small">-</span>';
+                return;
+            }
+
+            slot.innerHTML = `
+                <form action="/Home/CancelPendingCommand" method="post">
+                    <input name="__RequestVerificationToken" type="hidden" value="${document.querySelector('input[name="__RequestVerificationToken"]')?.value ?? ''}" />
+                    <input type="hidden" name="deviceEntityId" value="${deviceId}" />
+                    <button type="submit" class="btn btn-outline-danger btn-sm">Cancel</button>
+                </form>`;
+        }
+
+        function updateStatusBadge(deviceId, status) {
+            const badge = document.querySelector(`.device-command-badge[data-device-id="${deviceId}"]`);
+            if (!badge) {
+                return;
+            }
+
+            badge.className = `badge device-command-badge ${status.badgeClass}`;
+            badge.textContent = status.text;
+        }
+
+        function renderHistory(historyItems) {
+            if (!historyTableBody) {
+                return;
+            }
+
+            historyTableBody.innerHTML = historyItems.map((item) => {
+                const updated = item.updatedAtUtc ?? item.createdAtUtc;
+                const when = updated ? new Date(updated).toLocaleString() : '-';
+                const name = item.deviceName || item.deviceId || '-';
+                return `
+                    <tr data-command-id="${item.id}">
+                        <td>${escapeHtml(name)}</td>
+                        <td>${escapeHtml(item.requestedSeconds)} s</td>
+                        <td><span class="badge ${escapeHtml(item.badgeClass)}">${escapeHtml(item.text)}</span></td>
+                        <td>${escapeHtml(item.requestedTransport)}</td>
+                        <td>${escapeHtml(when)}</td>
+                    </tr>`;
+            }).join('');
+        }
+
+        async function pollStatuses() {
+            try {
+                const response = await fetch(pollUrl, { headers: { 'X-Requested-With': 'XMLHttpRequest' } });
+                if (!response.ok) {
+                    return;
+                }
+
+                const payload = await response.json();
+                const statuses = payload.statuses || {};
+
+                Object.entries(statuses).forEach(([deviceId, status]) => {
+                    const previous = statusCache.get(deviceId);
+                    updateStatusBadge(deviceId, status);
+                    renderCancelSlot(deviceId, status.canCancel);
+                    if (previous && previous !== status.text) {
+                        showToast(`${deviceId}: ${status.text}`, status.badgeClass.includes('warning') ? 'warning' : 'success');
+                    }
+                    statusCache.set(deviceId, status.text);
+                });
+
+                renderHistory(payload.history || []);
+            } catch {
+                // keep polling quietly; page should stay usable even if refresh fails once
+            }
+        }
+
+        setInterval(pollStatuses, pollMs);
+    })();
+</script>

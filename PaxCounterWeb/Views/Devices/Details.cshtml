@@ -2,7 +2,8 @@
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 
-<h2>@Model.Name</h2>
+@* <h2>@Model.Name</h2> *@
+<h2>Monitorus</h2>
 
 <div id="map" style="height: 300px; margin-bottom: 20px;"></div>
 
@@ -169,8 +170,17 @@
         });
     </script>
 
+    <button id="generateSampleBtn" class="btn btn-primary">
+        Generate sample
+    </button>
 
-    <script>
+
+    <div id="samplesContainer">
+        @await Html.PartialAsync("_SamplesTable", Model.SamplesDesc.Take(10).ToList())
+    </div>
+
+
+@*     <script>
         async function generateSample(deviceId) {
             const res = await fetch('/Devices/GenerateSampleAjax', {
                 method: 'POST',
@@ -197,7 +207,49 @@
             // chart.data.labels.push(data.time)
             // chart.update()
         }
+    </script> *@
+
+        public IActionResult SamplesTable(int deviceId)
+    {
+        var samples = _db.PaxSamples
+            .Where(p => p.DeviceId == deviceId)
+            .OrderByDescending(p => p.Timestamp)
+            .Take(10)
+            .Select(p => new PaxSampleViewModel
+            {
+                Timestamp = p.Timestamp,
+                WifiCount = p.WifiCount,
+                BleCount = p.BleCount,
+                RssiLimit = p.RssiLimit
+            })
+            .ToList();
+
+        return PartialView("_SamplesTable", samples);
+    }
+
+
+
+    <script>
+        const deviceId = @Model.DeviceId;
+
+        document.getElementById("generateSampleBtn")
+            .addEventListener("click", async () => {
+
+                // 1️⃣ Pokliči generate sample
+                await fetch(`/Devices/GenerateSample?deviceId=${deviceId}`, {
+                    method: "POST"
+                });
+
+                // 2️⃣ Osveži samo tabelo
+                const resp = await fetch(`/Devices/LatestSamples?deviceId=${deviceId}`);
+                const html = await resp.text();
+
+                document.getElementById("samplesContainer").innerHTML = html;
+            });
     </script>
+
+
+
 
     <script>
         document.getElementById('generateSampleBtn')

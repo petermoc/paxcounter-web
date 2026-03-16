@@ -15,6 +15,8 @@
 
             public DbSet<PaxSample> PaxSamples => Set<PaxSample>();
             public DbSet<RssiSample> RssiSamples => Set<RssiSample>();
+            public DbSet<GpsSample> GpsSamples => Set<GpsSample>();
+            public DbSet<PendingDeviceCommand> PendingDeviceCommands => Set<PendingDeviceCommand>();
             //public DbSet<Device> Devices { get; set; }
 
             public DbSet<Device> Devices => Set<Device>();

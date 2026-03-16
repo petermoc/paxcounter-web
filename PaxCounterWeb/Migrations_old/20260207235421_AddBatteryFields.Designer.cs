@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PaxCounterWeb.Data.PaxCounterWeb.Data;
 
@@ -10,9 +11,11 @@ using PaxCounterWeb.Data.PaxCounterWeb.Data;
 namespace PaxCounterWeb.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260207235421_AddBatteryFields")]
+    partial class AddBatteryFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.1");
@@ -78,9 +81,6 @@ namespace PaxCounterWeb.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
-                    b.Property<int?>("Altitude")
-                        .HasColumnType("INTEGER");
-
                     b.Property<double?>("BatteryPercent")
                         .HasColumnType("REAL");
 
@@ -93,19 +93,7 @@ namespace PaxCounterWeb.Migrations
                     b.Property<int>("DeviceId")
                         .HasColumnType("INTEGER");
 
-                    b.Property<double?>("Hdop")
-                        .HasColumnType("REAL");
-
-                    b.Property<double?>("Latitude")
-                        .HasColumnType("REAL");
-
-                    b.Property<double?>("Longitude")
-                        .HasColumnType("REAL");
-
                     b.Property<int>("RssiLimit")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int?>("Satellites")
                         .HasColumnType("INTEGER");
 
                     b.Property<DateTime>("Timestamp")

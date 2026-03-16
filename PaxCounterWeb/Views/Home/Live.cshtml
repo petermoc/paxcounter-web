@@ -1,0 +1,173 @@
+@model PaxCounterWeb.ViewModels.LiveDevicePageViewModel
+@{
+    ViewData["Title"] = $"Live - {Model.DeviceName}";
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h2 class="mb-0">Live Footfall: @Model.DeviceName</h2>
+    <a class="btn btn-outline-secondary btn-sm" href="/">Back</a>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">BLE now</div>
+                <div id="kpiBleNow" class="display-6">@Model.LatestBle</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">WiFi now</div>
+                <div id="kpiWifiNow" class="display-6">@Model.LatestWifi</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">BLE avg (15m)</div>
+                <div id="kpiBleAvg15m" class="display-6">@Model.AvgBle15m.ToString("0.00")</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-6 col-lg-3">
+        <div class="card">
+            <div class="card-body">
+                <div class="text-muted small">BLE peak today</div>
+                <div id="kpiBlePeakToday" class="display-6">@Model.PeakBleToday</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5 class="mb-0">BLE time series</h5>
+            <small id="lastSeen" class="text-muted">Last seen: -</small>
+        </div>
+        <div class="row g-2 mb-3">
+            <div class="col-6 col-lg-3">
+                <label for="minutesSelect" class="form-label mb-1">Period</label>
+                <select id="minutesSelect" class="form-select form-select-sm">
+                    <option value="60">Last 1h</option>
+                    <option value="180" selected>Last 3h</option>
+                    <option value="360">Last 6h</option>
+                    <option value="720">Last 12h</option>
+                    <option value="1440">Last 24h</option>
+                    <option value="43200">Last 30d</option>
+                </select>
+            </div>
+            <div class="col-6 col-lg-3">
+                <label for="bucketSelect" class="form-label mb-1">Resolution</label>
+                <select id="bucketSelect" class="form-select form-select-sm">
+                    <option value="1">1 min</option>
+                    <option value="5" selected>5 min</option>
+                    <option value="10">10 min</option>
+                    <option value="15">15 min</option>
+                    <option value="30">30 min</option>
+                    <option value="60">60 min</option>
+                </select>
+            </div>
+            <div class="col-12 col-lg-6 d-flex align-items-end">
+                <small id="rangeInfo" class="text-muted"></small>
+            </div>
+        </div>
+        <canvas id="bleChart" height="90"></canvas>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const deviceId = "@Model.DeviceId";
+    let chart;
+    const minutesSelect = document.getElementById("minutesSelect");
+    const bucketSelect = document.getElementById("bucketSelect");
+    const rangeInfo = document.getElementById("rangeInfo");
+
+    function currentEndpoint() {
+        const minutes = Number(minutesSelect.value || 180);
+        const bucketMinutes = Number(bucketSelect.value || 5);
+        return `/api/metrics/ble?deviceId=${encodeURIComponent(deviceId)}&minutes=${minutes}&bucketMinutes=${bucketMinutes}`;
+    }
+
+    function formatLocal(utcIso) {
+        if (!utcIso) return "-";
+        return new Date(utcIso).toLocaleString();
+    }
+
+    function buildChart(labels, avgSeries, maxSeries) {
+        const ctx = document.getElementById("bleChart");
+        chart = new Chart(ctx, {
+            type: "line",
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: "BLE avg",
+                        data: avgSeries,
+                        borderColor: "rgb(54, 162, 235)",
+                        backgroundColor: "rgba(54, 162, 235, 0.2)",
+                        tension: 0.25
+                    },
+                    {
+                        label: "BLE max",
+                        data: maxSeries,
+                        borderColor: "rgb(255, 99, 132)",
+                        backgroundColor: "rgba(255, 99, 132, 0.2)",
+                        tension: 0.25
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                interaction: { mode: "index", intersect: false },
+                scales: {
+                    y: { beginAtZero: true, title: { display: true, text: "BLE count" } }
+                }
+            }
+        });
+    }
+
+    function updateKpis(data) {
+        document.getElementById("kpiBleNow").textContent = data.latestBle ?? 0;
+        document.getElementById("kpiWifiNow").textContent = data.latestWifi ?? 0;
+        document.getElementById("kpiBleAvg15m").textContent = (data.avgBle15m ?? 0).toFixed(2);
+        document.getElementById("kpiBlePeakToday").textContent = data.peakBleToday ?? 0;
+        document.getElementById("lastSeen").textContent = `Last seen: ${formatLocal(data.lastSeenUtc)}`;
+    }
+
+    async function refreshChart() {
+        const response = await fetch(currentEndpoint(), { cache: "no-store" });
+        if (!response.ok) {
+            return;
+        }
+
+        const data = await response.json();
+        updateKpis(data);
+        const labels = data.points.map(p => new Date(p.bucketUtc).toLocaleTimeString());
+        const avgSeries = data.points.map(p => p.bleAvg);
+        const maxSeries = data.points.map(p => p.bleMax);
+        rangeInfo.textContent = `Window: ${data.minutes} min | Bucket: ${data.bucketMinutes} min | Points: ${data.points.length}`;
+
+        if (!chart) {
+            buildChart(labels, avgSeries, maxSeries);
+            return;
+        }
+
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = avgSeries;
+        chart.data.datasets[1].data = maxSeries;
+        chart.update();
+    }
+
+    minutesSelect.addEventListener("change", refreshChart);
+    bucketSelect.addEventListener("change", refreshChart);
+
+    refreshChart();
+    setInterval(refreshChart, 10000);
+</script>
