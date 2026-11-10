@@ -31,7 +31,14 @@ public sealed class PendingCommandDispatcherService : BackgroundService
                 _logger.LogWarning(ex, "Pending command dispatcher loop failed.");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                break;
+            }
         }
     }
 

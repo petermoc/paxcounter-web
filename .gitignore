@@ -13,3 +13,7 @@ appsettings.Development.json
 
 ## Logs
 *.log
+
+# Local home Wi-Fi preferences
+appsettings.homewifi.local.json
+appsettings.homewifi.local.json.tmp

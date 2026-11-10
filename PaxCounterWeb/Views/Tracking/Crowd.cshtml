@@ -1,0 +1,574 @@
+@model PaxCounterWeb.ViewModels.CrowdEstimateViewModel
+@{
+    ViewData["Title"] = Model.PageTitle;
+}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+<div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+    <div>
+        <h2 class="mb-0">@Model.PageTitle</h2>
+        <div class="small text-muted">Estimate crowd size in the area you covered during the last walk by converting BLE observations into low / best / high people estimates.</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="/tracking">Back to tracking</a>
+    </div>
+</div>
+
+<div class="row g-2 mb-2">
+    <div class="col-6 col-lg-2">
+        <label for="minutesSelect" class="form-label mb-1">Period</label>
+        <select id="minutesSelect" class="form-select form-select-sm">
+            <option value="60">Last 1h</option>
+            <option value="120">Last 2h</option>
+            <option value="180">Last 3h</option>
+            <option value="240">Last 4h</option>
+            <option value="360">Last 6h</option>
+            <option value="720">Last 12h</option>
+        </select>
+    </div>
+    <div class="col-6 col-lg-2">
+        <label for="cellMetersSelect" class="form-label mb-1">Grid cell</label>
+        <select id="cellMetersSelect" class="form-select form-select-sm">
+            <option value="10">10 m</option>
+            <option value="20" selected>20 m</option>
+            <option value="30">30 m</option>
+            <option value="40">40 m</option>
+        </select>
+    </div>
+    <div class="col-6 col-lg-2">
+        <label for="activeMinutesSelect" class="form-label mb-1">Live window</label>
+        <select id="activeMinutesSelect" class="form-select form-select-sm">
+            <option value="10">10 min</option>
+            <option value="15" selected>15 min</option>
+            <option value="20">20 min</option>
+            <option value="30">30 min</option>
+        </select>
+    </div>
+    <div class="col-6 col-lg-2">
+        <label for="refreshSelect" class="form-label mb-1">Refresh</label>
+        <select id="refreshSelect" class="form-select form-select-sm">
+            <option value="0">Manual</option>
+            <option value="15">15 s</option>
+            <option value="30" selected>30 s</option>
+            <option value="60">60 s</option>
+        </select>
+    </div>
+    <div class="col-12 col-lg-4">
+        <label class="form-label mb-1">Devices</label>
+        <div class="form-check">
+            <input class="form-check-input" type="checkbox" id="deviceAll" checked>
+            <label class="form-check-label" for="deviceAll">@Model.AllDevicesLabel</label>
+        </div>
+        @foreach (var d in Model.Devices)
+        {
+            var isChecked = Model.SelectedDeviceIds.Contains(d.DeviceId, StringComparer.OrdinalIgnoreCase);
+            var checkboxId = $"crowd_device_{d.DeviceId.Replace(" ", "_").Replace(".", "_")}";
+            <div class="form-check">
+                <input class="form-check-input device-pick" type="checkbox" id="@checkboxId" value="@d.DeviceId" @(isChecked ? "checked" : "")>
+                <label class="form-check-label" for="@checkboxId">@d.DisplayName</label>
+            </div>
+        }
+        @if (Model.Devices.Count == 0)
+        {
+            <div class="small text-warning mt-2">@Model.EmptyStateMessage</div>
+        }
+    </div>
+</div>
+
+<div class="d-flex justify-content-end gap-2 mt-2 mb-2">
+    <div id="loadStatus" class="align-self-center small text-muted me-2"></div>
+    <button id="refreshBtn" type="button" class="btn btn-sm btn-outline-primary">Refresh estimate</button>
+    <button id="centerBtn" type="button" class="btn btn-sm btn-outline-secondary">Center map</button>
+</div>
+
+<div class="row g-2 mb-2">
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2 px-3">
+                <div class="small text-uppercase text-muted fw-semibold">Window</div>
+                <div class="small mt-1">
+                    Range: <strong id="summaryRange">-</strong><br />
+                    Raw points: <strong id="summaryPoints">0</strong><br />
+                    Last point: <strong id="summaryLastPoint">-</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2 px-3">
+                <div class="small text-uppercase text-muted fw-semibold">Coverage</div>
+                <div class="small mt-1">
+                    Visited cells: <strong id="summaryVisitedCells">0</strong><br />
+                    Covered area: <strong id="summaryVisitedArea">0 m2</strong><br />
+                    Crowd cells: <strong id="summaryCrowdCells">0</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card border-0 bg-info-subtle shadow-sm h-100">
+            <div class="card-body py-2 px-3">
+                <div class="small text-uppercase text-muted fw-semibold">Live Area Estimate</div>
+                <div class="small mt-1">
+                    Active cells: <strong id="summaryActiveCells">0</strong><br />
+                    Low / Best / High:<br />
+                    <strong id="summaryLiveLow">0</strong> / <strong id="summaryLiveBest">0</strong> / <strong id="summaryLiveHigh">0</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-md-6 col-xl-3">
+        <div class="card border-0 bg-warning-subtle shadow-sm h-100">
+            <div class="card-body py-2 px-3">
+                <div class="small text-uppercase text-muted fw-semibold">Covered Walk Estimate</div>
+                <div class="small mt-1">
+                    Peak BLE cell: <strong id="summaryPeakBle">0</strong><br />
+                    Low / Best / High:<br />
+                    <strong id="summaryCoveredLow">0</strong> / <strong id="summaryCoveredBest">0</strong> / <strong id="summaryCoveredHigh">0</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="crowdMap" style="height: 68vh; border: 1px solid #ddd;"></div>
+<div class="mt-2">
+    <div class="small text-muted mb-1">Crowd cells use the 95th percentile BLE seen in each grid square, then convert BLE to people with multipliers 2.0 / 3.0 / 4.5.</div>
+    <div class="small text-muted">This estimates the crowd in the area you covered, not automatically the whole festival.</div>
+</div>
+
+<div class="row g-2 mt-2">
+    <div class="col-12 col-xl-7">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2 px-3">
+                <div class="small text-uppercase text-muted fw-semibold mb-2">Top Cells</div>
+                <div class="table-responsive">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead>
+                            <tr>
+                                <th>Cell</th>
+                                <th>BLE</th>
+                                <th>Best</th>
+                                <th>Samples</th>
+                                <th>Devices</th>
+                                <th>Last seen</th>
+                            </tr>
+                        </thead>
+                        <tbody id="topCellsBody">
+                            <tr><td colspan="6" class="text-muted">No data loaded yet.</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-xl-5">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body py-2 px-3">
+                <div class="small text-uppercase text-muted fw-semibold mb-2">Method</div>
+                <div class="small text-muted">
+                    1. Load the last 1-12 hours of track points from the existing tracking API.<br />
+                    2. Split the walked area into grid cells of 10-40 meters.<br />
+                    3. For each cell, keep the strongest stable BLE signal (95th percentile when enough samples exist).<br />
+                    4. Convert BLE to people with low / best / high factors.<br />
+                    5. Show both the current live estimate and the wider covered-walk estimate.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const initialMinutes = @Model.InitialMinutes;
+    const initialCellMeters = @Model.InitialCellMeters;
+    const initialActiveMinutes = @Model.InitialActiveMinutes;
+    const map = L.map('crowdMap', { zoomControl: true }).setView([46.05, 14.5], 13);
+    const baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 22,
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const minutesSelect = document.getElementById('minutesSelect');
+    const cellMetersSelect = document.getElementById('cellMetersSelect');
+    const activeMinutesSelect = document.getElementById('activeMinutesSelect');
+    const refreshSelect = document.getElementById('refreshSelect');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const centerBtn = document.getElementById('centerBtn');
+    const loadStatus = document.getElementById('loadStatus');
+    const topCellsBody = document.getElementById('topCellsBody');
+    const deviceAllCheckbox = document.getElementById('deviceAll');
+    const deviceCheckboxes = Array.from(document.querySelectorAll('.device-pick'));
+
+    const summaryRange = document.getElementById('summaryRange');
+    const summaryPoints = document.getElementById('summaryPoints');
+    const summaryLastPoint = document.getElementById('summaryLastPoint');
+    const summaryVisitedCells = document.getElementById('summaryVisitedCells');
+    const summaryVisitedArea = document.getElementById('summaryVisitedArea');
+    const summaryCrowdCells = document.getElementById('summaryCrowdCells');
+    const summaryActiveCells = document.getElementById('summaryActiveCells');
+    const summaryLiveLow = document.getElementById('summaryLiveLow');
+    const summaryLiveBest = document.getElementById('summaryLiveBest');
+    const summaryLiveHigh = document.getElementById('summaryLiveHigh');
+    const summaryPeakBle = document.getElementById('summaryPeakBle');
+    const summaryCoveredLow = document.getElementById('summaryCoveredLow');
+    const summaryCoveredBest = document.getElementById('summaryCoveredBest');
+    const summaryCoveredHigh = document.getElementById('summaryCoveredHigh');
+
+    const routeLayers = [];
+    const cellLayers = [];
+    let refreshTimerId = null;
+    let lastRenderBounds = null;
+
+    minutesSelect.value = String(initialMinutes);
+    cellMetersSelect.value = String(initialCellMeters);
+    activeMinutesSelect.value = String(initialActiveMinutes);
+
+    function setStatus(message, isError = false) {
+        loadStatus.textContent = message || '';
+        loadStatus.className = isError
+            ? 'align-self-center small text-danger me-2'
+            : 'align-self-center small text-muted me-2';
+    }
+
+    function getSelectedDevices() {
+        return deviceCheckboxes.filter(cb => cb.checked).map(cb => cb.value).filter(Boolean);
+    }
+
+    function syncAllCheckbox() {
+        const checkedCount = deviceCheckboxes.filter(cb => cb.checked).length;
+        deviceAllCheckbox.checked = checkedCount === deviceCheckboxes.length && deviceCheckboxes.length > 0;
+    }
+
+    function formatNumber(value) {
+        return new Intl.NumberFormat().format(Math.round(value || 0));
+    }
+
+    function quantile(sortedValues, q) {
+        if (!sortedValues.length) return 0;
+        if (sortedValues.length === 1) return sortedValues[0];
+        const index = Math.max(0, Math.min(sortedValues.length - 1, Math.ceil(q * sortedValues.length) - 1));
+        return sortedValues[index];
+    }
+
+    function bleColor(value, maxValue) {
+        const ble = Number(value || 0);
+        const maxBle = Math.max(1, Number(maxValue || 0));
+        const ratio = Math.max(0, Math.min(1, ble / maxBle));
+        if (ratio === 0) return '#d1d5db';
+        if (ratio < 0.2) return '#22c55e';
+        if (ratio < 0.4) return '#84cc16';
+        if (ratio < 0.6) return '#facc15';
+        if (ratio < 0.8) return '#fb923c';
+        return '#ef4444';
+    }
+
+    function buildEstimate(points, cellMeters, activeMinutes) {
+        const sortedPoints = [...points].sort((a, b) => new Date(a.timestampUtc) - new Date(b.timestampUtc));
+        if (!sortedPoints.length) {
+            return {
+                points: [],
+                path: [],
+                cells: [],
+                visitedCellCount: 0,
+                visitedAreaM2: 0,
+                crowdedCellCount: 0,
+                activeCellCount: 0,
+                liveLow: 0,
+                liveBest: 0,
+                liveHigh: 0,
+                coveredLow: 0,
+                coveredBest: 0,
+                coveredHigh: 0,
+                peakBle: 0,
+                maxBle: 0
+            };
+        }
+
+        const refLat = sortedPoints.reduce((sum, p) => sum + Number(p.lat || 0), 0) / sortedPoints.length;
+        const latStep = cellMeters / 111320;
+        const lonStep = cellMeters / Math.max(1, 111320 * Math.cos(refLat * Math.PI / 180));
+        const activeCutoffMs = Date.now() - (activeMinutes * 60 * 1000);
+        const cellMap = new Map();
+        const path = [];
+        const seenPathKeys = new Set();
+
+        for (const point of sortedPoints) {
+            const lat = Number(point.lat);
+            const lon = Number(point.lon);
+            if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+                continue;
+            }
+
+            const pathKey = `${point.timestampUtc}|${lat.toFixed(6)}|${lon.toFixed(6)}`;
+            if (!seenPathKeys.has(pathKey)) {
+                seenPathKeys.add(pathKey);
+                path.push([lat, lon]);
+            }
+
+            const row = Math.floor(lat / latStep);
+            const col = Math.floor(lon / lonStep);
+            const key = `${row}:${col}`;
+            const timestampMs = new Date(point.timestampUtc).getTime();
+            const ble = Math.max(0, Number(point.ble || 0));
+
+            if (!cellMap.has(key)) {
+                cellMap.set(key, {
+                    key,
+                    row,
+                    col,
+                    centerLat: (row + 0.5) * latStep,
+                    centerLon: (col + 0.5) * lonStep,
+                    values: [],
+                    sampleCount: 0,
+                    lastSeenMs: 0,
+                    lastSeenIso: point.timestampUtc,
+                    devices: new Set(),
+                    topics: new Set()
+                });
+            }
+
+            const cell = cellMap.get(key);
+            cell.values.push(ble);
+            cell.sampleCount += 1;
+            cell.lastSeenMs = Math.max(cell.lastSeenMs, timestampMs);
+            if (cell.lastSeenMs === timestampMs) {
+                cell.lastSeenIso = point.timestampUtc;
+            }
+            cell.devices.add(point.deviceId || '-');
+            cell.topics.add(point.sourceTopic || '-');
+        }
+
+        const cells = Array.from(cellMap.values()).map(cell => {
+            const sortedValues = [...cell.values].sort((a, b) => a - b);
+            const cellBle = sortedValues.length >= 3
+                ? quantile(sortedValues, 0.95)
+                : Math.max(...sortedValues, 0);
+            const low = cellBle * 2.0;
+            const best = cellBle * 3.0;
+            const high = cellBle * 4.5;
+            return {
+                key: cell.key,
+                centerLat: cell.centerLat,
+                centerLon: cell.centerLon,
+                sampleCount: cell.sampleCount,
+                deviceCount: cell.devices.size,
+                deviceLabel: Array.from(cell.devices).sort((a, b) => a.localeCompare(b)).join(', '),
+                topicLabel: Array.from(cell.topics).sort((a, b) => a.localeCompare(b)).join(', '),
+                lastSeenIso: cell.lastSeenIso,
+                lastSeenMs: cell.lastSeenMs,
+                observedBle: cellBle,
+                maxBle: Math.max(...sortedValues, 0),
+                lowEstimate: low,
+                bestEstimate: best,
+                highEstimate: high,
+                isActive: cell.lastSeenMs >= activeCutoffMs
+            };
+        });
+
+        const crowdedCells = cells.filter(cell => cell.observedBle > 0);
+        const activeCells = crowdedCells.filter(cell => cell.isActive);
+        const maxBle = crowdedCells.length ? Math.max(...crowdedCells.map(cell => cell.observedBle)) : 0;
+
+        return {
+            points: sortedPoints,
+            path,
+            cells,
+            crowdedCells,
+            activeCells,
+            visitedCellCount: cells.length,
+            visitedAreaM2: cells.length * cellMeters * cellMeters,
+            crowdedCellCount: crowdedCells.length,
+            activeCellCount: activeCells.length,
+            liveLow: activeCells.reduce((sum, cell) => sum + cell.lowEstimate, 0),
+            liveBest: activeCells.reduce((sum, cell) => sum + cell.bestEstimate, 0),
+            liveHigh: activeCells.reduce((sum, cell) => sum + cell.highEstimate, 0),
+            coveredLow: crowdedCells.reduce((sum, cell) => sum + cell.lowEstimate, 0),
+            coveredBest: crowdedCells.reduce((sum, cell) => sum + cell.bestEstimate, 0),
+            coveredHigh: crowdedCells.reduce((sum, cell) => sum + cell.highEstimate, 0),
+            peakBle: maxBle,
+            maxBle
+        };
+    }
+
+    function clearMapLayers() {
+        while (routeLayers.length) {
+            const layer = routeLayers.pop();
+            map.removeLayer(layer);
+        }
+        while (cellLayers.length) {
+            const layer = cellLayers.pop();
+            map.removeLayer(layer);
+        }
+    }
+
+    function renderMap(estimate, cellMeters) {
+        clearMapLayers();
+        const bounds = [];
+
+        if (estimate.path.length >= 2) {
+            const route = L.polyline(estimate.path, {
+                color: '#475569',
+                weight: 3,
+                opacity: 0.4
+            }).addTo(map);
+            routeLayers.push(route);
+            estimate.path.forEach(latlng => bounds.push(latlng));
+        }
+
+        for (const cell of estimate.crowdedCells) {
+            const latlng = [cell.centerLat, cell.centerLon];
+            bounds.push(latlng);
+            const radius = Math.max(8, Math.min(30, 8 + (cell.bestEstimate / 12)));
+            const marker = L.circleMarker(latlng, {
+                radius,
+                color: cell.isActive ? '#0f172a' : '#334155',
+                weight: cell.isActive ? 2 : 1,
+                fillColor: bleColor(cell.observedBle, estimate.maxBle),
+                fillOpacity: cell.isActive ? 0.85 : 0.55,
+                opacity: 0.95
+            }).bindPopup(`
+                <strong>${cell.key}</strong><br />
+                BLE: <strong>${Math.round(cell.observedBle)}</strong><br />
+                Low / Best / High: <strong>${formatNumber(cell.lowEstimate)}</strong> / <strong>${formatNumber(cell.bestEstimate)}</strong> / <strong>${formatNumber(cell.highEstimate)}</strong><br />
+                Samples: <strong>${cell.sampleCount}</strong><br />
+                Devices: <strong>${cell.deviceLabel}</strong><br />
+                Last seen: <strong>${new Date(cell.lastSeenIso).toLocaleString()}</strong><br />
+                Cell size: <strong>${cellMeters} m</strong>
+            `);
+            marker.addTo(map);
+            cellLayers.push(marker);
+        }
+
+        lastRenderBounds = bounds.length ? L.latLngBounds(bounds) : null;
+    }
+
+    function renderTopCells(estimate) {
+        const topCells = [...estimate.crowdedCells]
+            .sort((a, b) => b.bestEstimate - a.bestEstimate || b.observedBle - a.observedBle)
+            .slice(0, 10);
+
+        if (topCells.length === 0) {
+            topCellsBody.innerHTML = '<tr><td colspan="6" class="text-muted">No BLE observations in the selected window yet.</td></tr>';
+            return;
+        }
+
+        topCellsBody.innerHTML = topCells.map(cell => `
+            <tr>
+                <td><code>${cell.key}</code></td>
+                <td>${Math.round(cell.observedBle)}</td>
+                <td>${formatNumber(cell.bestEstimate)}</td>
+                <td>${formatNumber(cell.sampleCount)}</td>
+                <td>${cell.deviceLabel}</td>
+                <td>${new Date(cell.lastSeenIso).toLocaleString()}</td>
+            </tr>
+        `).join('');
+    }
+
+    function updateSummary(points, estimate, minutes) {
+        summaryRange.textContent = `Last ${minutes} min`;
+        summaryPoints.textContent = formatNumber(points.length);
+        summaryLastPoint.textContent = points.length
+            ? new Date(points[points.length - 1].timestampUtc).toLocaleString()
+            : '-';
+        summaryVisitedCells.textContent = formatNumber(estimate.visitedCellCount);
+        summaryVisitedArea.textContent = `${formatNumber(estimate.visitedAreaM2)} m2`;
+        summaryCrowdCells.textContent = formatNumber(estimate.crowdedCellCount);
+        summaryActiveCells.textContent = formatNumber(estimate.activeCellCount);
+        summaryLiveLow.textContent = formatNumber(estimate.liveLow);
+        summaryLiveBest.textContent = formatNumber(estimate.liveBest);
+        summaryLiveHigh.textContent = formatNumber(estimate.liveHigh);
+        summaryPeakBle.textContent = formatNumber(estimate.peakBle);
+        summaryCoveredLow.textContent = formatNumber(estimate.coveredLow);
+        summaryCoveredBest.textContent = formatNumber(estimate.coveredBest);
+        summaryCoveredHigh.textContent = formatNumber(estimate.coveredHigh);
+    }
+
+    function centerMap() {
+        if (lastRenderBounds && lastRenderBounds.isValid()) {
+            map.fitBounds(lastRenderBounds.pad(0.15), { maxZoom: 19 });
+        }
+    }
+
+    async function loadEstimate() {
+        const minutes = Number(minutesSelect.value || initialMinutes);
+        const cellMeters = Number(cellMetersSelect.value || initialCellMeters);
+        const activeMinutes = Number(activeMinutesSelect.value || initialActiveMinutes);
+        const selectedDevices = getSelectedDevices();
+
+        setStatus('Loading crowd estimate...');
+        refreshBtn.disabled = true;
+
+        try {
+            const params = new URLSearchParams();
+            params.set('minutes', String(minutes));
+            selectedDevices.forEach(deviceId => params.append('deviceIds', deviceId));
+
+            const response = await fetch(`/tracking/api/track?${params.toString()}`, { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`Tracking API returned ${response.status}`);
+            }
+
+            const points = await response.json();
+            const estimate = buildEstimate(points, cellMeters, activeMinutes);
+            renderMap(estimate, cellMeters);
+            renderTopCells(estimate);
+            updateSummary(points, estimate, minutes);
+
+            if (points.length === 0) {
+                setStatus('No track points in the selected window yet.', true);
+            } else if (estimate.crowdedCellCount === 0) {
+                setStatus('GPS points are present, but BLE stayed at zero in this window.');
+            } else {
+                setStatus(`Loaded ${formatNumber(points.length)} points across ${formatNumber(estimate.crowdedCellCount)} crowd cells.`);
+            }
+
+            if (!lastRenderBounds && estimate.path.length > 0) {
+                lastRenderBounds = L.latLngBounds(estimate.path);
+            }
+            centerMap();
+        } catch (error) {
+            console.error(error);
+            setStatus(error.message || 'Failed to load crowd estimate.', true);
+            clearMapLayers();
+            renderTopCells({ crowdedCells: [] });
+            updateSummary([], buildEstimate([], cellMeters, activeMinutes), minutes);
+        } finally {
+            refreshBtn.disabled = false;
+        }
+    }
+
+    function resetTimer() {
+        if (refreshTimerId) {
+            clearInterval(refreshTimerId);
+            refreshTimerId = null;
+        }
+
+        const seconds = Number(refreshSelect.value || 0);
+        if (seconds > 0) {
+            refreshTimerId = setInterval(loadEstimate, seconds * 1000);
+        }
+    }
+
+    deviceAllCheckbox?.addEventListener('change', () => {
+        deviceCheckboxes.forEach(cb => cb.checked = deviceAllCheckbox.checked);
+        loadEstimate();
+    });
+
+    deviceCheckboxes.forEach(cb => cb.addEventListener('change', () => {
+        syncAllCheckbox();
+        loadEstimate();
+    }));
+
+    minutesSelect.addEventListener('change', loadEstimate);
+    cellMetersSelect.addEventListener('change', loadEstimate);
+    activeMinutesSelect.addEventListener('change', loadEstimate);
+    refreshSelect.addEventListener('change', resetTimer);
+    refreshBtn.addEventListener('click', loadEstimate);
+    centerBtn.addEventListener('click', centerMap);
+
+    syncAllCheckbox();
+    loadEstimate();
+    resetTimer();
+</script>

@@ -1,0 +1,317 @@
+@model PaxCounterWeb.ViewModels.FootfallLayoutViewModel
+@{
+    ViewData["Title"] = Model.Title;
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="mb-0">@Model.Title</h2>
+        <div class="text-muted small">Place fixed pax nodes directly on an OpenStreetMap view. This is the best setup for block, parking, and shopping-center pilot work.</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-secondary btn-sm" href="/footfall">Monitor</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/">Back</a>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-12 col-xl-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="mb-3">
+                    <label for="layoutName" class="form-label">Layout name</label>
+                    <input id="layoutName" class="form-control" value="@Model.LayoutName" />
+                </div>
+                <div class="mb-3">
+                    <label for="nodeDeviceId" class="form-label">Device</label>
+                    <select id="nodeDeviceId" class="form-select">
+                        <option value="">Choose device</option>
+                        @foreach (var device in Model.KnownDevices)
+                        {
+                            <option value="@device.DeviceId">@device.DisplayName</option>
+                        }
+                    </select>
+                </div>
+                <div class="mb-2">
+                    <label for="nodeLabel" class="form-label">Label</label>
+                    <input id="nodeLabel" class="form-control" placeholder="Car 1 / Window / Scooter" />
+                </div>
+                <div class="mb-2">
+                    <label for="nodeZone" class="form-label">Zone</label>
+                    <input id="nodeZone" class="form-control" placeholder="Parking / Entrance / North side" />
+                </div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6">
+                        <label for="nodeColor" class="form-label">Color</label>
+                        <input id="nodeColor" class="form-control form-control-color" type="color" value="#2563eb" />
+                    </div>
+                    <div class="col-6">
+                        <label for="nodeRlim" class="form-label">RLIM hint</label>
+                        <input id="nodeRlim" class="form-control" type="number" value="0" />
+                    </div>
+                </div>
+                <div class="row g-2 mb-2">
+                    <div class="col-6">
+                        <label for="nodeLat" class="form-label">Latitude</label>
+                        <input id="nodeLat" class="form-control" placeholder="46.0569" />
+                    </div>
+                    <div class="col-6">
+                        <label for="nodeLon" class="form-label">Longitude</label>
+                        <input id="nodeLon" class="form-control" placeholder="14.5058" />
+                    </div>
+                </div>
+                <div class="form-check mb-3">
+                    <input id="nodeActive" class="form-check-input" type="checkbox" checked />
+                    <label for="nodeActive" class="form-check-label">Node active</label>
+                </div>
+                <div class="small text-muted mb-3">Click on the map to prefill latitude and longitude, then add or update the node.</div>
+                <div class="d-flex gap-2 mb-3">
+                    <button id="addNodeBtn" type="button" class="btn btn-primary btn-sm">Add node</button>
+                    <button id="updateNodeBtn" type="button" class="btn btn-outline-primary btn-sm">Update</button>
+                    <button id="deleteNodeBtn" type="button" class="btn btn-outline-danger btn-sm">Delete</button>
+                </div>
+                <div class="d-flex gap-2">
+                    <button id="saveLayoutBtn" type="button" class="btn btn-success">Save layout</button>
+                    <span id="layoutSaveStatus" class="small text-muted align-self-center"></span>
+                </div>
+            </div>
+        </div>
+        <div class="card shadow-sm mt-3">
+            <div class="card-body">
+                <div class="fw-semibold mb-2">Nodes</div>
+                <div id="nodeList" class="small text-muted">No nodes yet.</div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-xl-8">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="small text-muted mb-2">Click map to place a node. Drag existing markers to refine exact pax positions.</div>
+                <div id="layoutMap" style="height: 72vh; border: 1px solid #ddd; border-radius: 0.5rem;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const nodeList = document.getElementById('nodeList');
+    const layoutName = document.getElementById('layoutName');
+    const nodeDeviceId = document.getElementById('nodeDeviceId');
+    const nodeLabel = document.getElementById('nodeLabel');
+    const nodeZone = document.getElementById('nodeZone');
+    const nodeColor = document.getElementById('nodeColor');
+    const nodeRlim = document.getElementById('nodeRlim');
+    const nodeLat = document.getElementById('nodeLat');
+    const nodeLon = document.getElementById('nodeLon');
+    const nodeActive = document.getElementById('nodeActive');
+    const layoutSaveStatus = document.getElementById('layoutSaveStatus');
+    const map = L.map('layoutMap', { zoomSnap: 0.25, zoomDelta: 0.25 }).setView([46.0569, 14.5058], 18);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxNativeZoom: 19,
+        maxZoom: 22,
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let nodes = [];
+    let selectedIndex = -1;
+    let markers = [];
+
+    function clearMarkers() {
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+    }
+
+    function renderNodeList() {
+        if (nodes.length === 0) {
+            nodeList.textContent = 'No nodes yet.';
+            return;
+        }
+
+        nodeList.innerHTML = nodes.map((node, index) =>
+            `<div class="border rounded px-2 py-1 mb-1 ${index === selectedIndex ? 'bg-primary-subtle' : ''}">
+                <strong>${node.label || node.deviceId}</strong>
+                <span class="text-muted">(${node.deviceId})</span><br/>
+                <span>${node.zone || 'No zone'} | lat=${Number(node.y).toFixed(6)} lon=${Number(node.x).toFixed(6)} | RLIM ${node.rlimHint || 0}</span>
+            </div>`
+        ).join('');
+    }
+
+    function renderMap(fit = false) {
+        clearMarkers();
+        const bounds = [];
+
+        nodes.forEach((node, index) => {
+            const marker = L.circleMarker([Number(node.y), Number(node.x)], {
+                radius: 10,
+                color: index === selectedIndex ? '#111827' : '#ffffff',
+                weight: 3,
+                fillColor: node.accentColor || '#2563eb',
+                fillOpacity: 0.95
+            }).addTo(map);
+
+            marker.bindTooltip(`${node.label || node.deviceId}<br>${node.zone || 'No zone'}`, {
+                direction: 'top',
+                offset: [0, -10],
+                opacity: 0.95
+            });
+
+            marker.on('click', () => selectNode(index));
+            marker.on('mousedown', () => {
+                map.dragging.disable();
+            });
+
+            marker.on('mouseup', () => {
+                map.dragging.enable();
+            });
+
+            marker.on('mouseover', function () {
+                this.openTooltip();
+            });
+
+            marker.on('mouseout', function () {
+                this.closeTooltip();
+            });
+
+            marker.dragging?.enable?.();
+            marker.on('dragend', (event) => {
+                const latlng = event.target.getLatLng();
+                nodes[index].y = latlng.lat;
+                nodes[index].x = latlng.lng;
+                if (index === selectedIndex) {
+                    nodeLat.value = latlng.lat.toFixed(6);
+                    nodeLon.value = latlng.lng.toFixed(6);
+                }
+                renderNodeList();
+            });
+
+            markers.push(marker);
+            bounds.push([Number(node.y), Number(node.x)]);
+        });
+
+        renderNodeList();
+        if (fit && bounds.length > 0) {
+            map.fitBounds(bounds, { padding: [30, 30], maxZoom: 20 });
+        }
+    }
+
+    function selectNode(index) {
+        selectedIndex = index;
+        const node = nodes[index];
+        nodeDeviceId.value = node.deviceId || '';
+        nodeLabel.value = node.label || '';
+        nodeZone.value = node.zone || '';
+        nodeColor.value = node.accentColor || '#2563eb';
+        nodeRlim.value = node.rlimHint || 0;
+        nodeActive.checked = !!node.isActive;
+        nodeLat.value = Number(node.y).toFixed(6);
+        nodeLon.value = Number(node.x).toFixed(6);
+        renderMap(false);
+    }
+
+    function clearEditor() {
+        selectedIndex = -1;
+        nodeDeviceId.value = '';
+        nodeLabel.value = '';
+        nodeZone.value = '';
+        nodeColor.value = '#2563eb';
+        nodeRlim.value = 0;
+        nodeActive.checked = true;
+        nodeLat.value = '';
+        nodeLon.value = '';
+        renderMap(false);
+    }
+
+    function readEditorNode() {
+        return {
+            deviceId: nodeDeviceId.value.trim(),
+            label: nodeLabel.value.trim(),
+            zone: nodeZone.value.trim(),
+            x: Number(nodeLon.value || 0),
+            y: Number(nodeLat.value || 0),
+            accentColor: nodeColor.value || '#2563eb',
+            rlimHint: Number(nodeRlim.value || 0),
+            isActive: nodeActive.checked
+        };
+    }
+
+    async function loadLayout() {
+        const response = await fetch('/footfall/api/layout', { cache: 'no-store' });
+        if (!response.ok) return;
+        const payload = await response.json();
+        layoutName.value = payload.name || 'Default Layout';
+        nodes = (payload.nodes || []).map(x => ({
+            deviceId: x.deviceId,
+            label: x.label,
+            zone: x.zone,
+            x: x.x,
+            y: x.y,
+            accentColor: x.accentColor,
+            rlimHint: x.rlimHint,
+            isActive: x.isActive
+        }));
+        selectedIndex = -1;
+        renderMap(true);
+    }
+
+    document.getElementById('addNodeBtn').addEventListener('click', () => {
+        const node = readEditorNode();
+        if (!node.deviceId) {
+            layoutSaveStatus.textContent = 'Choose a device first.';
+            return;
+        }
+        if (!Number.isFinite(node.x) || !Number.isFinite(node.y) || node.x === 0 && node.y === 0) {
+            layoutSaveStatus.textContent = 'Click the map first or enter latitude/longitude.';
+            return;
+        }
+        nodes.push(node);
+        clearEditor();
+    });
+
+    document.getElementById('updateNodeBtn').addEventListener('click', () => {
+        if (selectedIndex < 0) {
+            layoutSaveStatus.textContent = 'Select a node first.';
+            return;
+        }
+        nodes[selectedIndex] = readEditorNode();
+        renderMap(false);
+    });
+
+    document.getElementById('deleteNodeBtn').addEventListener('click', () => {
+        if (selectedIndex < 0) {
+            return;
+        }
+        nodes.splice(selectedIndex, 1);
+        clearEditor();
+    });
+
+    document.getElementById('saveLayoutBtn').addEventListener('click', async () => {
+        layoutSaveStatus.textContent = 'Saving...';
+        const response = await fetch('/footfall/api/layout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                name: layoutName.value.trim(),
+                nodes
+            })
+        });
+        const payload = await response.json();
+        layoutSaveStatus.textContent = payload.message || (payload.success ? 'Saved.' : 'Save failed.');
+        if (payload.success) {
+            await loadLayout();
+        }
+    });
+
+    map.on('click', (event) => {
+        selectedIndex = -1;
+        nodeLat.value = event.latlng.lat.toFixed(6);
+        nodeLon.value = event.latlng.lng.toFixed(6);
+        layoutSaveStatus.textContent = `Picked lat=${nodeLat.value}, lon=${nodeLon.value}`;
+        renderMap(false);
+    });
+
+    loadLayout();
+</script>
+}

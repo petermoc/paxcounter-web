@@ -17,14 +17,17 @@
             </div>
         </div>
     </div>
-    <div class="col-6 col-lg-3">
-        <div class="card">
-            <div class="card-body">
-                <div class="text-muted small">WiFi now</div>
-                <div id="kpiWifiNow" class="display-6">@Model.LatestWifi</div>
+    @if (Model.ShowWifiCounts)
+    {
+        <div class="col-6 col-lg-3">
+            <div class="card">
+                <div class="card-body">
+                    <div class="text-muted small">WiFi now</div>
+                    <div id="kpiWifiNow" class="display-6">@Model.LatestWifi</div>
+                </div>
             </div>
         </div>
-    </div>
+    }
     <div class="col-6 col-lg-3">
         <div class="card">
             <div class="card-body">
@@ -135,7 +138,12 @@
 
     function updateKpis(data) {
         document.getElementById("kpiBleNow").textContent = data.latestBle ?? 0;
-        document.getElementById("kpiWifiNow").textContent = data.latestWifi ?? 0;
+        if (data.showWifiCounts) {
+            const wifiKpi = document.getElementById("kpiWifiNow");
+            if (wifiKpi) {
+                wifiKpi.textContent = data.latestWifi ?? 0;
+            }
+        }
         document.getElementById("kpiBleAvg15m").textContent = (data.avgBle15m ?? 0).toFixed(2);
         document.getElementById("kpiBlePeakToday").textContent = data.peakBleToday ?? 0;
         document.getElementById("lastSeen").textContent = `Last seen: ${formatLocal(data.lastSeenUtc)}`;

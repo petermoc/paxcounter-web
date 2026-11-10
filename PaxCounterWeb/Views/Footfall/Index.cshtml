@@ -1,0 +1,195 @@
+@model PaxCounterWeb.ViewModels.FootfallLayoutViewModel
+@{
+    ViewData["Title"] = Model.Title;
+}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div>
+        <h2 class="mb-0">@Model.Title</h2>
+        <div class="text-muted small">Monitor fixed pax nodes on a real map. Node color intensity is based on the latest live pax signal counts.</div>
+    </div>
+    <div class="d-flex gap-2">
+        <a class="btn btn-outline-primary btn-sm" href="/footfall/layout">Edit layout</a>
+        <a class="btn btn-outline-secondary btn-sm" href="/">Back</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-3">
+    <div class="col-6 col-lg-2">
+        <label for="footfallRefresh" class="form-label mb-1">Refresh</label>
+        <select id="footfallRefresh" class="form-select form-select-sm">
+            <option value="5">5s</option>
+            <option value="10" selected>10s</option>
+            <option value="30">30s</option>
+            <option value="60">60s</option>
+        </select>
+    </div>
+    <div class="col-6 col-lg-2">
+        <label for="footfallMinutes" class="form-label mb-1">Lookback</label>
+        <select id="footfallMinutes" class="form-select form-select-sm">
+            <option value="5">5m</option>
+            <option value="15">15m</option>
+            <option value="30" selected>30m</option>
+            <option value="60">60m</option>
+            <option value="180">3h</option>
+        </select>
+    </div>
+    <div class="col-12 col-lg-8 d-flex align-items-end">
+        <div class="small text-muted">This is the first live step before adding zone heatmaps and estimated flow lines.</div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-12 col-xl-8">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div id="footfallMap" style="height: 72vh; border: 1px solid #ddd; border-radius: 0.5rem;"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-xl-4">
+        <div class="card shadow-sm">
+            <div class="card-body">
+                <div class="fw-semibold mb-2">Node summary</div>
+                <div id="footfallSummary" class="small text-muted">Waiting for data...</div>
+            </div>
+        </div>
+        <div class="card shadow-sm mt-3">
+            <div class="card-body">
+                <div class="fw-semibold mb-2">Legend</div>
+                <div class="small mb-2"><span class="badge rounded-pill" style="background:#dbeafe;color:#1e3a8a;">Low</span> low signal activity</div>
+                <div class="small mb-2"><span class="badge rounded-pill" style="background:#93c5fd;color:#082f49;">Medium</span> moderate node traffic</div>
+                <div class="small"><span class="badge rounded-pill" style="background:#1d4ed8;color:#ffffff;">High</span> strongest current node activity</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    const footfallSummary = document.getElementById('footfallSummary');
+    const footfallRefresh = document.getElementById('footfallRefresh');
+    const footfallMinutes = document.getElementById('footfallMinutes');
+    const map = L.map('footfallMap', { zoomSnap: 0.25, zoomDelta: 0.25 }).setView([46.0569, 14.5058], 18);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxNativeZoom: 19,
+        maxZoom: 22,
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let markers = [];
+    let timerId = null;
+
+    function nodeFillColor(score, maxScore, accentColor) {
+        if (maxScore <= 0) {
+            return '#e5e7eb';
+        }
+        const ratio = Math.max(0, Math.min(1, score / maxScore));
+        if (ratio <= 0.2) return '#dbeafe';
+        if (ratio <= 0.45) return '#93c5fd';
+        if (ratio <= 0.7) return accentColor || '#3b82f6';
+        return '#1d4ed8';
+    }
+
+    function clearMarkers() {
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+    }
+
+    function renderMonitor(payload) {
+        const nodes = payload.nodes || [];
+        const showWifiCounts = payload.showWifiCounts !== false;
+        clearMarkers();
+
+        if (nodes.length === 0) {
+            footfallSummary.textContent = 'No footfall nodes placed yet. Open Edit layout first.';
+            return;
+        }
+
+        const maxPax = Math.max(...nodes.map(n => Number(n.pax || 0)));
+        const bounds = [];
+
+        for (const node of nodes) {
+            const marker = L.circleMarker([Number(node.y), Number(node.x)], {
+                radius: 14,
+                color: '#ffffff',
+                weight: 3,
+                fillColor: nodeFillColor(Number(node.pax || 0), maxPax, node.accentColor),
+                fillOpacity: 0.92
+            }).addTo(map);
+
+            const breakdown = showWifiCounts
+                ? `BLE ${node.ble} | WiFi ${node.wifi} | PAX ${node.pax}`
+                : `BLE ${node.ble} | PAX ${node.pax}`;
+
+            marker.bindPopup(`
+                <strong>${node.label || node.deviceId}</strong><br>
+                ${node.zone || 'No zone'}<br>
+                ${breakdown}<br>
+                Last: ${node.timestampUtc ? new Date(node.timestampUtc).toLocaleString() : '-'}<br>
+                ${node.source || '-'}
+            `);
+
+            const tooltip = L.tooltip({
+                permanent: true,
+                direction: 'right',
+                offset: [16, 0],
+                opacity: 0.9,
+                className: 'footfall-label'
+            }).setContent(`<strong>${node.label || node.deviceId}</strong><br>${node.zone || 'No zone'}`);
+
+            marker.bindTooltip(tooltip).openTooltip();
+            markers.push(marker);
+            bounds.push([Number(node.y), Number(node.x)]);
+        }
+
+        footfallSummary.innerHTML = nodes.map(node => {
+            const ts = node.timestampUtc ? new Date(node.timestampUtc).toLocaleString() : '-';
+            const breakdown = showWifiCounts
+                ? `BLE ${node.ble} | WiFi ${node.wifi} | PAX ${node.pax}`
+                : `BLE ${node.ble} | PAX ${node.pax}`;
+            return `<div class="border rounded px-2 py-1 mb-1">
+                <strong>${node.label || node.deviceId}</strong>
+                <span class="text-muted">(${node.zone || 'No zone'})</span><br>
+                <span>${breakdown}</span><br>
+                <span class="text-muted">Last: ${ts} | ${node.source}</span>
+            </div>`;
+        }).join('');
+
+        map.fitBounds(bounds, { padding: [30, 30], maxZoom: 20 });
+    }
+
+    async function loadLive() {
+        const minutes = Number(footfallMinutes.value || 30);
+        const response = await fetch(`/footfall/api/live?minutes=${minutes}`, { cache: 'no-store' });
+        if (!response.ok) return;
+        const payload = await response.json();
+        renderMonitor(payload);
+    }
+
+    function resetTimer() {
+        if (timerId) {
+            clearInterval(timerId);
+        }
+        timerId = setInterval(loadLive, Number(footfallRefresh.value || 10) * 1000);
+    }
+
+    footfallRefresh.addEventListener('change', resetTimer);
+    footfallMinutes.addEventListener('change', loadLive);
+
+    loadLive();
+    resetTimer();
+</script>
+<style>
+    .footfall-label {
+        background: rgba(255, 255, 255, 0.92);
+        border: 1px solid rgba(148, 163, 184, 0.75);
+        border-radius: 8px;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.15);
+        color: #0f172a;
+        padding: 4px 8px;
+    }
+</style>
+}

@@ -13,6 +13,7 @@ public class TrackPoint
     public int Wifi { get; set; }
     public int Pax { get; set; }
     public string DeviceId { get; set; } = "";
+    public string? SourceTopic { get; set; }
 }
 
 public class TrackStore
@@ -78,7 +79,8 @@ public class TrackStore
                     Ble = pax.ble,
                     Wifi = pax.wifi,
                     Pax = pax.pax,
-                    DeviceId = deviceId
+                    DeviceId = deviceId,
+                    SourceTopic = null
                 };
 
                 _track.Add(point);

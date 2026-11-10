@@ -11,7 +11,7 @@ public class HomeViewModel
     public string? HistoryChannelFilter { get; set; }
     public DateTime HistoryFromUtc { get; set; }
     public int HistoryTotalInWindow { get; set; }
-    public List<string> HistoryAvailableDeviceIds { get; set; } = new();
+    public List<DeviceOptionViewModel> HistoryAvailableDevices { get; set; } = new();
     public int Page { get; set; }
     public int PageSize { get; set; } = 10;
     public int TotalPages { get; set; }
@@ -20,9 +20,19 @@ public class HomeViewModel
     public GpsDisplayMode GpsDisplayMode { get; set; } = GpsDisplayMode.Decimal;
     public bool PendingOnly { get; set; }
     public bool ShowHidden { get; set; }
+    public bool EnableRlimOtaControls { get; set; }
+    public bool SyncPhoneGpsIntervalFromApp { get; set; }
+    public bool ShowWifiCounts { get; set; } = true;
+    public bool EnableBleScanOtaControls { get; set; }
     public Dictionary<int, DeviceCommandStatusViewModel> DeviceCommandStatuses { get; set; } = new();
     public List<DeviceCommandHistoryItemViewModel> RecentDeviceCommands { get; set; } = new();
     public Dictionary<int, DeviceBleSummaryViewModel> DeviceBleSummaries { get; set; } = new();
+}
+
+public class DeviceOptionViewModel
+{
+    public string DeviceId { get; set; } = "";
+    public string DisplayName { get; set; } = "";
 }
 
 public class DeviceBleSummaryViewModel
@@ -39,7 +49,7 @@ public class DeviceCommandStatusViewModel
     public string Text { get; set; } = "";
     public string BadgeClass { get; set; } = "bg-secondary";
     public bool CanCancel { get; set; }
-    public int? RequestedSeconds { get; set; }
+    public string RequestedDisplay { get; set; } = "";
     public string? DeliveryMode { get; set; }
     public DateTime? UpdatedAtUtc { get; set; }
 }
@@ -52,7 +62,7 @@ public class DeviceCommandHistoryItemViewModel
     public string DeviceName { get; set; } = "";
     public string Text { get; set; } = "";
     public string BadgeClass { get; set; } = "bg-secondary";
-    public int RequestedSeconds { get; set; }
+    public string RequestedDisplay { get; set; } = "";
     public string RequestedTransport { get; set; } = "";
     public DateTime CreatedAtUtc { get; set; }
     public DateTime? UpdatedAtUtc { get; set; }
@@ -74,6 +84,7 @@ public class LiveSampleViewModel
     public double? Hdop { get; set; }
     public int? Altitude { get; set; }
     public string? SourceChannel { get; set; }
+    public string? WifiSsid { get; set; }
 }
 
 public class LiveDevicePageViewModel
@@ -82,6 +93,8 @@ public class LiveDevicePageViewModel
     public string DeviceName { get; set; } = "";
     public int LatestBle { get; set; }
     public int LatestWifi { get; set; }
+    public bool ShowWifiCounts { get; set; } = true;
+    public bool EnableBleScanOtaControls { get; set; }
     public double AvgBle15m { get; set; }
     public int PeakBleToday { get; set; }
     public DateTime? LastSeenUtc { get; set; }
@@ -102,6 +115,8 @@ public class BleMetricsResponseViewModel
     public int BucketMinutes { get; set; }
     public int LatestBle { get; set; }
     public int LatestWifi { get; set; }
+    public bool ShowWifiCounts { get; set; } = true;
+    public bool EnableBleScanOtaControls { get; set; }
     public double AvgBle15m { get; set; }
     public int PeakBleToday { get; set; }
     public DateTime? LastSeenUtc { get; set; }
@@ -110,6 +125,5 @@ public class BleMetricsResponseViewModel
 
 public class ComparePageViewModel
 {
-    public List<string> DeviceIds { get; set; } = new();
+    public List<DeviceOptionViewModel> DeviceIds { get; set; } = new();
 }
-

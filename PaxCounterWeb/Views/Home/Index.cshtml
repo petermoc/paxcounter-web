@@ -4,7 +4,6 @@
 
 @using PaxCounterWeb.Services
 @model PaxCounterWeb.ViewModels.HomeViewModel
-
 <h2>Live Uplinks</h2>
 
 <form asp-controller="Home"
@@ -53,6 +52,38 @@
 
     string FormatLat(double? lat) => GpsCoordinateFormatter.FormatLatitude(lat, gpsMode);
     string FormatLon(double? lon) => GpsCoordinateFormatter.FormatLongitude(lon, gpsMode);
+    string FormatChannel(string? sourceChannel, string? wifiSsid)
+    {
+        if (string.IsNullOrWhiteSpace(sourceChannel))
+        {
+            return string.IsNullOrWhiteSpace(wifiSsid)
+                ? "-"
+                : $"WiFi/HTTP via {wifiSsid}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(wifiSsid) &&
+            sourceChannel.Contains("WiFi/HTTP", StringComparison.OrdinalIgnoreCase) &&
+            !sourceChannel.Contains(" via ", StringComparison.OrdinalIgnoreCase))
+        {
+            if (sourceChannel.Contains("+ GPS join", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"WiFi/HTTP via {wifiSsid} + GPS join";
+            }
+
+            return $"WiFi/HTTP via {wifiSsid}";
+        }
+
+        return sourceChannel;
+    }
+
+    bool IsGpsJoined(string? sourceChannel) =>
+        !string.IsNullOrWhiteSpace(sourceChannel) &&
+        sourceChannel.Contains("GPS join", StringComparison.OrdinalIgnoreCase);
+
+    bool IsWifiGpsJoined(string? sourceChannel) =>
+        !string.IsNullOrWhiteSpace(sourceChannel) &&
+        sourceChannel.Contains("WiFi/HTTP", StringComparison.OrdinalIgnoreCase) &&
+        sourceChannel.Contains("GPS join", StringComparison.OrdinalIgnoreCase);
 }
 
 <div aria-live="polite" aria-atomic="true" class="position-fixed top-0 end-0 p-3" style="z-index: 1080;">
@@ -75,15 +106,15 @@
         <label class="form-label mb-1" for="historyDeviceId">Device</label>
         <select id="historyDeviceId" name="historyDeviceId" class="form-select form-select-sm">
             <option value="">All devices</option>
-            @foreach (var d in Model.HistoryAvailableDeviceIds)
+            @foreach (var d in Model.HistoryAvailableDevices)
             {
-                if (string.Equals(Model.HistoryDeviceId, d, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(Model.HistoryDeviceId, d.DeviceId, StringComparison.OrdinalIgnoreCase))
                 {
-                    <option value="@d" selected>@d</option>
+                    <option value="@d.DeviceId" selected>@d.DisplayName</option>
                 }
                 else
                 {
-                    <option value="@d">@d</option>
+                    <option value="@d.DeviceId">@d.DisplayName</option>
                 }
             }
         </select>
@@ -92,7 +123,10 @@
         <label class="form-label mb-1" for="historyChannelFilter">Channel</label>
         <select id="historyChannelFilter" name="historyChannelFilter" class="form-select form-select-sm">
             @if (string.IsNullOrWhiteSpace(Model.HistoryChannelFilter)) { <option value="" selected>All channels</option> } else { <option value="">All channels</option> }
-            @if (string.Equals(Model.HistoryChannelFilter, "wifi", StringComparison.OrdinalIgnoreCase)) { <option value="wifi" selected>WiFi only</option> } else { <option value="wifi">WiFi only</option> }
+            @if (Model.ShowWifiCounts)
+            {
+                @if (string.Equals(Model.HistoryChannelFilter, "wifi", StringComparison.OrdinalIgnoreCase)) { <option value="wifi" selected>WiFi only</option> } else { <option value="wifi">WiFi only</option> }
+            }
             @if (string.Equals(Model.HistoryChannelFilter, "lora", StringComparison.OrdinalIgnoreCase)) { <option value="lora" selected>LoRa only</option> } else { <option value="lora">LoRa only</option> }
             @if (string.Equals(Model.HistoryChannelFilter, "gps", StringComparison.OrdinalIgnoreCase)) { <option value="gps" selected>GPS related</option> } else { <option value="gps">GPS related</option> }
         </select>
@@ -130,7 +164,10 @@
             <th>Time (Local)</th>
             <th>Age</th>
             <th>Device</th>
-            <th>WiFi</th>
+            @if (Model.ShowWifiCounts)
+            {
+                <th>WiFi</th>
+            }
             <th>BLE</th>
             <th>RLIM</th>
             <th>Battery (mV)</th>
@@ -141,6 +178,7 @@
             <th>HDOP</th>
             <th>Alt</th>
             <th>Channel</th>
+            <th>Fallback SSID</th>
         </tr>
     </thead>
     <tbody>
@@ -153,7 +191,10 @@
                 <td>@localTime.ToString("yyyy-MM-dd HH:mm:ss") @tzLabel</td>
                 <td>@FormatRelativeTime(utc)</td>
                 <td>@(string.IsNullOrWhiteSpace(s.DeviceName) ? s.DeviceId : s.DeviceName)</td>
-                <td>@s.WifiCount</td>
+                @if (Model.ShowWifiCounts)
+                {
+                    <td>@s.WifiCount</td>
+                }
                 <td>@s.BleCount</td>
                 <td>@s.RssiLimit</td>
                 <td>@(s.BatteryVoltageMv?.ToString() ?? "-")</td>
@@ -163,11 +204,85 @@
                 <td>@(s.Satellites?.ToString() ?? "-")</td>
                 <td>@(s.Hdop?.ToString("0.00") ?? "-")</td>
                 <td>@(s.Altitude?.ToString() ?? "-")</td>
-                <td>@(string.IsNullOrWhiteSpace(s.SourceChannel) ? "-" : s.SourceChannel)</td>
+                <td>
+                    <div class="d-flex flex-wrap align-items-center gap-1">
+                        <span>@FormatChannel(s.SourceChannel, s.WifiSsid)</span>
+                        @if (IsWifiGpsJoined(s.SourceChannel))
+                        {
+                            <span class="gps-join-badge gps-join-badge--wifi">WiFi + GPS join</span>
+                        }
+                        else if (IsGpsJoined(s.SourceChannel))
+                        {
+                            <span class="gps-join-badge">GPS joined</span>
+                        }
+                    </div>
+                </td>
+                <td>@(string.IsNullOrWhiteSpace(s.WifiSsid) ? "-" : s.WifiSsid)</td>
             </tr>
         }
     </tbody>
 </table>
+
+<div class="card mt-4 mb-3">
+    <div class="card-body py-3">
+        <div class="fw-semibold mb-2">Measurement interval</div>
+        <form asp-controller="Home" asp-action="SetReportingIntervalForAll" method="post" class="d-flex flex-wrap gap-1 align-items-center">
+            @Html.AntiForgeryToken()
+            <span class="me-2 align-self-center small text-muted">Set all pax interval:</span>
+            <button type="submit" name="seconds" value="10" class="btn btn-outline-primary btn-sm">All 10s</button>
+            <button type="submit" name="seconds" value="30" class="btn btn-outline-primary btn-sm">All 30s</button>
+            <button type="submit" name="seconds" value="60" class="btn btn-outline-primary btn-sm">All 60s</button>
+            <button type="submit" name="seconds" value="120" class="btn btn-outline-primary btn-sm">All 120s</button>
+        </form>
+        <div class="form-text mt-2">
+            @if (Model.SyncPhoneGpsIntervalFromApp)
+            {
+                <span>These same buttons also sync the phone GPS interval through Direct GPS, when the phone next checks for settings.</span>
+            }
+            else
+            {
+                <span>Phone GPS sync from app is currently off in Settings, so these buttons only update pax reporting.</span>
+            }
+        </div>
+    </div>
+</div>
+
+@if (Model.EnableBleScanOtaControls)
+{
+    <div class="card mb-3">
+        <div class="card-body py-3">
+            <div class="fw-semibold mb-2">BLE scan OTA</div>
+            <form asp-controller="Home" asp-action="SetBleScanIntervalForAll" method="post" class="d-flex flex-wrap gap-1 align-items-center">
+                @Html.AntiForgeryToken()
+                <span class="me-2 align-self-center small text-muted">Set all pax BLE scan interval:</span>
+                <button type="submit" name="intervalMilliseconds" value="30" class="btn btn-outline-secondary btn-sm">Dense 30 ms</button>
+                <button type="submit" name="intervalMilliseconds" value="80" class="btn btn-outline-secondary btn-sm">Normal 80 ms</button>
+                <button type="submit" name="intervalMilliseconds" value="150" class="btn btn-outline-secondary btn-sm">Wide 150 ms</button>
+                <button type="submit" name="intervalMilliseconds" value="250" class="btn btn-outline-secondary btn-sm">Sparse 250 ms</button>
+            </form>
+            <div class="form-text mt-2">Higher milliseconds usually mean less aggressive BLE scanning and lower load or power draw.</div>
+        </div>
+    </div>
+}
+
+@if (Model.EnableRlimOtaControls)
+{
+    <div class="card mb-3">
+        <div class="card-body py-3">
+            <div class="fw-semibold mb-2">RLIM OTA</div>
+            <form asp-controller="Home" asp-action="SetRssiLimitForAll" method="post" class="d-flex flex-wrap gap-1 align-items-center">
+                @Html.AntiForgeryToken()
+                <span class="me-2 align-self-center small text-muted">Set all pax RLIM:</span>
+                <button type="submit" name="rssiLimit" value="0" class="btn btn-outline-secondary btn-sm">Off</button>
+                <button type="submit" name="rssiLimit" value="-60" class="btn btn-outline-secondary btn-sm">-60</button>
+                <button type="submit" name="rssiLimit" value="-70" class="btn btn-outline-secondary btn-sm">-70</button>
+                <button type="submit" name="rssiLimit" value="-80" class="btn btn-outline-secondary btn-sm">-80</button>
+                <button type="submit" name="rssiLimit" value="-90" class="btn btn-outline-secondary btn-sm">-90</button>
+            </form>
+            <div class="form-text mt-2">RLIM controls are optional and can be hidden again in Settings.</div>
+        </div>
+    </div>
+}
 
 @{
     var currentPage = Model.Page + 1;
@@ -259,20 +374,12 @@
 
 <h2>Devices</h2>
 
-<form asp-controller="Home" asp-action="SetReportingIntervalForAll" method="post" class="d-flex flex-wrap gap-1 mb-3">
-    @Html.AntiForgeryToken()
-    <span class="me-2 align-self-center small text-muted">Set all pax interval:</span>
-    <button type="submit" name="seconds" value="10" class="btn btn-outline-primary btn-sm">All 10s</button>
-    <button type="submit" name="seconds" value="30" class="btn btn-outline-primary btn-sm">All 30s</button>
-    <button type="submit" name="seconds" value="60" class="btn btn-outline-primary btn-sm">All 60s</button>
-    <button type="submit" name="seconds" value="120" class="btn btn-outline-primary btn-sm">All 120s</button>
-</form>
-
 <table class="table">
     <thead>
         <tr>
             <th>Device</th>
             <th>Last Seen</th>
+            <th>Age</th>
             <th>Samples</th>
             <th>Last Lat</th>
             <th>Last Lon</th>
@@ -280,6 +387,14 @@
             <th>BLE Summary</th>
             <th>Live</th>
             <th>Interval OTA</th>
+            @if (Model.EnableBleScanOtaControls)
+            {
+                <th>BLE Scan OTA</th>
+            }
+            @if (Model.EnableRlimOtaControls)
+            {
+                <th>RLIM OTA</th>
+            }
             <th>Command status</th>
             <th>Cancel</th>
             <th>Visibility</th>
@@ -316,7 +431,7 @@
             var bleSummary = Model.DeviceBleSummaries.TryGetValue(d.Id, out var ble) ? ble : null;
             <tr data-device-id="@d.Id" class="@rowClass">
                 <td>
-                    @d.DeviceId
+                    @(string.IsNullOrWhiteSpace(d.Name) ? d.DeviceId : d.Name)
                     @if (d.IsHidden)
                     {
                         <span class="badge bg-warning text-dark ms-2">Hidden</span>
@@ -371,9 +486,37 @@
                         <button type="submit" name="seconds" value="120" class="btn btn-outline-secondary btn-sm">120s</button>
                     </form>
                 </td>
+                @if (Model.EnableBleScanOtaControls)
+                {
+                    <td>
+                        <form asp-controller="Home" asp-action="SetBleScanInterval" method="post" class="d-flex flex-wrap gap-1">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="deviceEntityId" value="@d.Id" />
+                            <button type="submit" name="intervalMilliseconds" value="30" class="btn btn-outline-secondary btn-sm">30</button>
+                            <button type="submit" name="intervalMilliseconds" value="80" class="btn btn-outline-secondary btn-sm">80</button>
+                            <button type="submit" name="intervalMilliseconds" value="150" class="btn btn-outline-secondary btn-sm">150</button>
+                            <button type="submit" name="intervalMilliseconds" value="250" class="btn btn-outline-secondary btn-sm">250</button>
+                        </form>
+                    </td>
+                }
+                @if (Model.EnableRlimOtaControls)
+                {
+                    <td>
+                        <form asp-controller="Home" asp-action="SetRssiLimit" method="post" class="d-flex flex-wrap gap-1">
+                            @Html.AntiForgeryToken()
+                            <input type="hidden" name="deviceEntityId" value="@d.Id" />
+                            <button type="submit" name="rssiLimit" value="0" class="btn btn-outline-secondary btn-sm">Off</button>
+                            <button type="submit" name="rssiLimit" value="-60" class="btn btn-outline-secondary btn-sm">-60</button>
+                            <button type="submit" name="rssiLimit" value="-70" class="btn btn-outline-secondary btn-sm">-70</button>
+                            <button type="submit" name="rssiLimit" value="-80" class="btn btn-outline-secondary btn-sm">-80</button>
+                            <button type="submit" name="rssiLimit" value="-90" class="btn btn-outline-secondary btn-sm">-90</button>
+                        </form>
+                    </td>
+                }
                 <td>
                     @if (Model.DeviceCommandStatuses.TryGetValue(d.Id, out var deviceCommandStatus))
                     {
+                        <div class="small text-muted mb-1">@deviceCommandStatus.RequestedDisplay</div>
                         <span class="badge device-command-badge @deviceCommandStatus.BadgeClass" data-device-id="@d.Id">@deviceCommandStatus.Text</span>
                     }
                     else
@@ -433,7 +576,7 @@
                 var updatedLabel = sloveniaTz.IsDaylightSavingTime(updatedLocal) ? "CEST" : "CET";
                 <tr data-command-id="@item.Id">
                     <td>@(string.IsNullOrWhiteSpace(item.DeviceName) ? item.DeviceId : item.DeviceName)</td>
-                    <td>@item.RequestedSeconds s</td>
+                    <td>@item.RequestedDisplay</td>
                     <td><span class="badge @item.BadgeClass">@item.Text</span></td>
                     <td>@item.RequestedTransport</td>
                     <td>@updatedLocal.ToString("yyyy-MM-dd HH:mm:ss") @updatedLabel</td>
@@ -532,7 +675,7 @@
                 return `
                     <tr data-command-id="${item.id}">
                         <td>${escapeHtml(name)}</td>
-                        <td>${escapeHtml(item.requestedSeconds)} s</td>
+                        <td>${escapeHtml(item.requestedDisplay)}</td>
                         <td><span class="badge ${escapeHtml(item.badgeClass)}">${escapeHtml(item.text)}</span></td>
                         <td>${escapeHtml(item.requestedTransport)}</td>
                         <td>${escapeHtml(when)}</td>
@@ -569,3 +712,6 @@
         setInterval(pollStatuses, pollMs);
     })();
 </script>
+
+
+

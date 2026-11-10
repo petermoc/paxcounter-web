@@ -16,6 +16,10 @@
             public DbSet<PaxSample> PaxSamples => Set<PaxSample>();
             public DbSet<RssiSample> RssiSamples => Set<RssiSample>();
             public DbSet<GpsSample> GpsSamples => Set<GpsSample>();
+            public DbSet<PhoneGpsHeartbeat> PhoneGpsHeartbeats => Set<PhoneGpsHeartbeat>();
+            public DbSet<TrackerPosition> TrackerPositions => Set<TrackerPosition>();
+            public DbSet<FootfallLayout> FootfallLayouts => Set<FootfallLayout>();
+            public DbSet<FootfallNode> FootfallNodes => Set<FootfallNode>();
             public DbSet<PendingDeviceCommand> PendingDeviceCommands => Set<PendingDeviceCommand>();
             //public DbSet<Device> Devices { get; set; }
 

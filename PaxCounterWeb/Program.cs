@@ -1,3 +1,5 @@
+using System.IO;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
@@ -6,11 +8,33 @@ using PaxCounterWeb.Data.PaxCounterWeb.Data;
 using PaxCounterWeb.Models;
 using PaxCounterWeb.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+var projectRoot = ResolveProjectRoot();
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = projectRoot
+});
+// Direct GPS credentials live outside the repository so phones can be rotated
+// independently without exposing keys in source control.
+builder.Configuration.AddJsonFile("appsettings.directgps.local.json", optional: true, reloadOnChange: true);
+builder.Configuration.AddJsonFile("appsettings.homewifi.local.json", optional: true, reloadOnChange: true);
+builder.WebHost.UseUrls(builder.Configuration["Urls"] ?? "http://localhost:5283");
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole();
 
 // Add services to the container.
 builder.Services.AddControllersWithViews();
 builder.Services.AddHttpContextAccessor();
+builder.Services.Configure<HostOptions>(options =>
+{
+    options.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.Ignore;
+});
+
+var dataProtectionPath = Path.Combine(AppContext.BaseDirectory, "DataProtectionKeys");
+Directory.CreateDirectory(dataProtectionPath);
+builder.Services
+    .AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionPath));
 
 var sqliteBuilder = new SqliteConnectionStringBuilder(
     builder.Configuration.GetConnectionString("DefaultConnection"))
@@ -20,19 +44,39 @@ var sqliteBuilder = new SqliteConnectionStringBuilder(
     Mode = SqliteOpenMode.ReadWriteCreate
 };
 
+if (!string.IsNullOrWhiteSpace(sqliteBuilder.DataSource) && !Path.IsPathRooted(sqliteBuilder.DataSource))
+{
+    sqliteBuilder.DataSource = Path.Combine(builder.Environment.ContentRootPath, sqliteBuilder.DataSource);
+}
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseSqlite(sqliteBuilder.ToString(), sqlite => sqlite.CommandTimeout(15)));
 
 builder.Services.AddHttpClient<TtnDownlinkService>();
-builder.Services.AddHttpClient<HomeAssistantGpsService>();
+builder.Services.AddScoped<PhoneGpsService>();
+builder.Services.AddSingleton<PhoneGpsControlStore>();
+builder.Services.AddSingleton<HomeWifiSettingsService>();
+builder.Services.AddHttpClient<FootfallRelayService>();
 builder.Services.AddScoped<PaxSimulatorService>();
 builder.Services.AddSingleton<WebhookLogStore>();
 builder.Services.AddSingleton<TrackStore>();
 builder.Services.AddScoped<GpsDisplaySettingsService>();
+builder.Services.AddScoped<UiFeatureSettingsService>();
+builder.Services.AddScoped<TrackerHomeModeSettingsService>();
+builder.Services.AddSingleton<TrackerModeOverrideService>();
 builder.Services.AddScoped<DeviceCommandService>();
-builder.Services.AddHostedService<MqttSubscriberService>();
-builder.Services.AddHostedService<PendingCommandDispatcherService>();
-builder.Services.AddHostedService<PendingCommandDispatcherService>();
+builder.Services.AddScoped<DirectGpsIngestService>();
+
+// Phone auto-mode is evaluated on authenticated Direct GPS polls.
+if (builder.Configuration.GetValue("BackgroundServices:MqttSubscriberEnabled", false))
+{
+    builder.Services.AddHostedService<MqttSubscriberService>();
+}
+
+if (builder.Configuration.GetValue("BackgroundServices:PendingCommandDispatcherEnabled", true))
+{
+    builder.Services.AddHostedService<PendingCommandDispatcherService>();
+}
 
 var app = builder.Build();
 
@@ -44,6 +88,9 @@ using (var scope = app.Services.CreateScope())
     EnsureSqlitePragmas(db);
     EnsurePaxSamplesSourceColumn(db);
     EnsureGpsSamplesTable(db);
+    EnsurePhoneGpsHeartbeatsTable(db);
+    EnsureTrackerPositionsTable(db);
+    EnsureFootfallTables(db);
     EnsurePendingDeviceCommandsTable(db);
     EnsureDevicesIsHiddenColumn(db);
 
@@ -100,17 +147,22 @@ if (!app.Environment.IsDevelopment())
     app.UseExceptionHandler("/Home/Error");
 }
 app.UseRouting();
+app.UseStaticFiles();
 
 app.UseAuthorization();
 
-app.MapStaticAssets();
 
 app.MapControllers();
 
+app.MapGet("/", context =>
+{
+    context.Response.Redirect("/landing");
+    return Task.CompletedTask;
+});
+
 app.MapControllerRoute(
     name: "default",
-    pattern: "{controller=Home}/{action=Index}/{id?}")
-    .WithStaticAssets();
+    pattern: "{controller=Tracking}/{action=Index}/{id?}");
 
 
 app.Run();
@@ -261,6 +313,103 @@ static void EnsureDevicesIsHiddenColumn(AppDbContext db)
     }
 }
 
+static string ResolveProjectRoot()
+{
+    var candidate = new DirectoryInfo(AppContext.BaseDirectory);
+    while (candidate is not null)
+    {
+        if (File.Exists(Path.Combine(candidate.FullName, "PaxCounterWeb.csproj")))
+        {
+            return candidate.FullName;
+        }
+
+        candidate = candidate.Parent;
+    }
+
+    return AppContext.BaseDirectory;
+}
+
+static void EnsureTrackerPositionsTable(AppDbContext db)
+{
+    var conn = db.Database.GetDbConnection();
+    var shouldClose = conn.State != System.Data.ConnectionState.Open;
+    if (shouldClose)
+    {
+        conn.Open();
+    }
+
+    try
+    {
+        using var create = conn.CreateCommand();
+        create.CommandText = @"
+CREATE TABLE IF NOT EXISTS TrackerPositions (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    DeviceId INTEGER NOT NULL,
+    TimestampUtc TEXT NOT NULL,
+    Latitude REAL NOT NULL,
+    Longitude REAL NOT NULL,
+    Altitude INTEGER NULL,
+    Satellites INTEGER NULL,
+    Hdop REAL NULL,
+    BatteryVoltageMv INTEGER NULL,
+    BatteryPercent REAL NULL,
+    SourceChannel TEXT NOT NULL DEFAULT 'LoRa/TTN',
+    FOREIGN KEY(DeviceId) REFERENCES Devices(Id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS IX_TrackerPositions_DeviceId_TimestampUtc
+    ON TrackerPositions(DeviceId, TimestampUtc);
+";
+        create.ExecuteNonQuery();
+    }
+    finally
+    {
+        if (shouldClose)
+        {
+            conn.Close();
+        }
+    }
+}
+
+static void EnsurePhoneGpsHeartbeatsTable(AppDbContext db)
+{
+    var conn = db.Database.GetDbConnection();
+    var shouldClose = conn.State != System.Data.ConnectionState.Open;
+    if (shouldClose)
+    {
+        conn.Open();
+    }
+
+    try
+    {
+        using var create = conn.CreateCommand();
+        create.CommandText = @"
+CREATE TABLE IF NOT EXISTS PhoneGpsHeartbeats (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    PhoneId TEXT NOT NULL UNIQUE,
+    LastReceivedUtc TEXT NOT NULL,
+    SampleTimestampUtc TEXT NOT NULL,
+    Latitude REAL NOT NULL,
+    Longitude REAL NOT NULL,
+    Accuracy INTEGER NULL,
+    BatteryPercent INTEGER NULL,
+    NetworkType TEXT NULL,
+    WifiSsid TEXT NULL,
+    PendingSamples INTEGER NOT NULL DEFAULT 0,
+    AppVersion TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS IX_PhoneGpsHeartbeats_PhoneId
+    ON PhoneGpsHeartbeats(PhoneId);";
+        create.ExecuteNonQuery();
+    }
+    finally
+    {
+        if (shouldClose)
+        {
+            conn.Close();
+        }
+    }
+}
+
 static void EnsurePendingDeviceCommandsTable(AppDbContext db)
 {
     var conn = db.Database.GetDbConnection();
@@ -302,4 +451,61 @@ CREATE INDEX IF NOT EXISTS IX_PendingDeviceCommands_DeviceEntityId_ConsumedAtUtc
         }
     }
 }
+
+static void EnsureFootfallTables(AppDbContext db)
+{
+    var conn = db.Database.GetDbConnection();
+    var shouldClose = conn.State != System.Data.ConnectionState.Open;
+    if (shouldClose)
+    {
+        conn.Open();
+    }
+
+    try
+    {
+        using var create = conn.CreateCommand();
+        create.CommandText = @"
+CREATE TABLE IF NOT EXISTS FootfallLayouts (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    Name TEXT NOT NULL,
+    Width INTEGER NOT NULL,
+    Height INTEGER NOT NULL,
+    BackgroundImageUrl TEXT NULL,
+    UpdatedAtUtc TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS FootfallNodes (
+    Id INTEGER PRIMARY KEY AUTOINCREMENT,
+    LayoutId INTEGER NOT NULL,
+    DeviceId TEXT NOT NULL,
+    Label TEXT NOT NULL,
+    Zone TEXT NOT NULL DEFAULT '',
+    X REAL NOT NULL,
+    Y REAL NOT NULL,
+    AccentColor TEXT NOT NULL DEFAULT '#2563eb',
+    RlimHint INTEGER NOT NULL DEFAULT 0,
+    IsActive INTEGER NOT NULL DEFAULT 1,
+    UpdatedAtUtc TEXT NOT NULL,
+    FOREIGN KEY(LayoutId) REFERENCES FootfallLayouts(Id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS IX_FootfallNodes_LayoutId
+    ON FootfallNodes(LayoutId);
+CREATE INDEX IF NOT EXISTS IX_FootfallNodes_DeviceId
+    ON FootfallNodes(DeviceId);
+";
+        create.ExecuteNonQuery();
+    }
+    finally
+    {
+        if (shouldClose)
+        {
+            conn.Close();
+        }
+    }
+}
+
+
+
+
 

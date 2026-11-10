@@ -13,12 +13,16 @@ namespace PaxCounterWeb.Controllers
         private readonly AppDbContext _db;
         private readonly GpsDisplaySettingsService _gpsDisplaySettingsService;
         private readonly DeviceCommandService _deviceCommandService;
+        private readonly UiFeatureSettingsService _uiFeatureSettingsService;
+        private readonly TrackerHomeModeSettingsService _trackerHomeModeSettingsService;
 
-        public HomeController(AppDbContext db, GpsDisplaySettingsService gpsDisplaySettingsService, DeviceCommandService deviceCommandService)
+        public HomeController(AppDbContext db, GpsDisplaySettingsService gpsDisplaySettingsService, DeviceCommandService deviceCommandService, UiFeatureSettingsService uiFeatureSettingsService, TrackerHomeModeSettingsService trackerHomeModeSettingsService)
         {
             _db = db;
             _gpsDisplaySettingsService = gpsDisplaySettingsService;
             _deviceCommandService = deviceCommandService;
+            _uiFeatureSettingsService = uiFeatureSettingsService;
+            _trackerHomeModeSettingsService = trackerHomeModeSettingsService;
         }
 
         public async Task<IActionResult> Index(int historyMinutes = 180, string? historyDeviceId = null, string? historyChannelFilter = null, int page = 0, int pageSize = 10, bool pendingOnly = false, bool showHidden = false)
@@ -99,7 +103,8 @@ namespace PaxCounterWeb.Controllers
                     Satellites = p.Satellites,
                     Hdop = p.Hdop,
                     Altitude = p.Altitude,
-                    SourceChannel = p.SourceChannel
+                    SourceChannel = p.SourceChannel,
+                    WifiSsid = ExtractWifiSsid(p.SourceChannel)
                 })
                 .ToListAsync();
 
@@ -122,6 +127,8 @@ namespace PaxCounterWeb.Controllers
                     .ToList();
             }
 
+            var showWifiCounts = _uiFeatureSettingsService.GetShowWifiCounts();
+
             var vm = new HomeViewModel
             {
                 Devices = devices,
@@ -137,15 +144,23 @@ namespace PaxCounterWeb.Controllers
                 GpsDisplayMode = _gpsDisplaySettingsService.GetMode(),
                 PendingOnly = pendingOnly,
                 ShowHidden = showHidden,
+                EnableRlimOtaControls = _uiFeatureSettingsService.GetRlimControlsEnabled(),
+                SyncPhoneGpsIntervalFromApp = _uiFeatureSettingsService.GetGpsIntervalSyncEnabled(),
+                ShowWifiCounts = showWifiCounts,
+                EnableBleScanOtaControls = _uiFeatureSettingsService.GetBleScanControlsEnabled(),
                 DeviceCommandStatuses = commandStatuses,
                 RecentDeviceCommands = recentDeviceCommands,
                 DeviceBleSummaries = deviceBleSummaries,
-                HistoryAvailableDeviceIds = devices
-                    .Select(d => d.DeviceId)
-                    .Where(id => !string.IsNullOrWhiteSpace(id))
-                    .Distinct()
-                    .OrderBy(id => id)
-                    .ToList()!
+                HistoryAvailableDevices = devices
+                    .Where(d => !string.IsNullOrWhiteSpace(d.DeviceId))
+                    .Select(d => new DeviceOptionViewModel
+                    {
+                        DeviceId = NormalizeHeltecAlias(d.DeviceId),
+                        DisplayName = ResolveCanonicalDisplayName(d.DeviceId, d.Name)
+                    })
+                    .DistinctBy(d => d.DeviceId)
+                    .OrderBy(d => d.DisplayName)
+                    .ToList()
             };
 
             return View(vm);
@@ -193,7 +208,7 @@ namespace PaxCounterWeb.Controllers
                         text = kvp.Value.Text,
                         badgeClass = kvp.Value.BadgeClass,
                         canCancel = kvp.Value.CanCancel,
-                        requestedSeconds = kvp.Value.RequestedSeconds,
+                        requestedDisplay = kvp.Value.RequestedDisplay,
                         deliveryMode = kvp.Value.DeliveryMode,
                         updatedAtUtc = kvp.Value.UpdatedAtUtc
                     });
@@ -207,7 +222,7 @@ namespace PaxCounterWeb.Controllers
                     deviceName = x.DeviceName,
                     text = x.Text,
                     badgeClass = x.BadgeClass,
-                    requestedSeconds = x.RequestedSeconds,
+                    requestedDisplay = x.RequestedDisplay,
                     requestedTransport = x.RequestedTransport,
                     createdAtUtc = x.CreatedAtUtc,
                     updatedAtUtc = x.UpdatedAtUtc
@@ -276,7 +291,7 @@ namespace PaxCounterWeb.Controllers
                         DeviceName = string.IsNullOrWhiteSpace(x.Device?.Name) ? (x.Device?.DeviceId ?? string.Empty) : x.Device.Name,
                         Text = status.Text,
                         BadgeClass = status.BadgeClass,
-                        RequestedSeconds = x.RequestedSeconds,
+                        RequestedDisplay = status.RequestedDisplay,
                         RequestedTransport = x.RequestedTransport,
                         CreatedAtUtc = x.CreatedAtUtc,
                         UpdatedAtUtc = status.UpdatedAtUtc
@@ -287,14 +302,16 @@ namespace PaxCounterWeb.Controllers
 
         private static DeviceCommandStatusViewModel BuildStatus(PendingDeviceCommand command)
         {
+            var requestedDisplay = FormatRequestedDisplay(command);
+
             if (command.ConsumedAtUtc != null)
             {
                 return new DeviceCommandStatusViewModel
                 {
-                    Text = $"WiFi delivered {command.RequestedSeconds}s",
+                    Text = $"WiFi delivered {requestedDisplay}",
                     BadgeClass = "bg-info text-dark",
                     CanCancel = false,
-                    RequestedSeconds = command.RequestedSeconds,
+                    RequestedDisplay = requestedDisplay,
                     DeliveryMode = "WiFi",
                     UpdatedAtUtc = command.ConsumedAtUtc
                 };
@@ -304,10 +321,10 @@ namespace PaxCounterWeb.Controllers
             {
                 return new DeviceCommandStatusViewModel
                 {
-                    Text = $"Queued {command.RequestedSeconds}s",
+                    Text = $"Queued {requestedDisplay}",
                     BadgeClass = "bg-secondary",
                     CanCancel = true,
-                    RequestedSeconds = command.RequestedSeconds,
+                    RequestedDisplay = requestedDisplay,
                     DeliveryMode = "Queued",
                     UpdatedAtUtc = command.CreatedAtUtc
                 };
@@ -317,10 +334,10 @@ namespace PaxCounterWeb.Controllers
             {
                 return new DeviceCommandStatusViewModel
                 {
-                    Text = $"LoRa accepted {command.RequestedSeconds}s",
+                    Text = $"LoRa accepted {requestedDisplay}",
                     BadgeClass = "bg-success",
                     CanCancel = true,
-                    RequestedSeconds = command.RequestedSeconds,
+                    RequestedDisplay = requestedDisplay,
                     DeliveryMode = "LoRa",
                     UpdatedAtUtc = command.LoRaAttemptedAtUtc
                 };
@@ -328,13 +345,41 @@ namespace PaxCounterWeb.Controllers
 
             return new DeviceCommandStatusViewModel
             {
-                Text = $"Waiting on WiFi ({command.RequestedSeconds}s)",
+                Text = $"Waiting on WiFi ({requestedDisplay})",
                 BadgeClass = "bg-warning text-dark",
                 CanCancel = true,
-                RequestedSeconds = command.RequestedSeconds,
+                RequestedDisplay = requestedDisplay,
                 DeliveryMode = "WiFi pending",
                 UpdatedAtUtc = command.LoRaAttemptedAtUtc
             };
+        }
+
+        private static string FormatRequestedDisplay(PendingDeviceCommand command)
+        {
+            return command.CommandName switch
+            {
+                "set_rssi" when command.RequestedSeconds == 0 => "RLIM off",
+                "set_rssi" => $"RLIM {command.RequestedSeconds} dBm",
+                "set_ble_scan_interval" => $"BLE scan {command.RequestedSeconds} ms",
+                _ => $"{command.RequestedSeconds}s"
+            };
+        }
+        private static string? ExtractWifiSsid(string? sourceChannel)
+        {
+            const string marker = " via ";
+            if (string.IsNullOrWhiteSpace(sourceChannel))
+            {
+                return null;
+            }
+
+            var idx = sourceChannel.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0)
+            {
+                return null;
+            }
+
+            var ssid = sourceChannel[(idx + marker.Length)..].Trim();
+            return string.IsNullOrWhiteSpace(ssid) ? null : ssid;
         }
 
         private async Task AttachGpsFromGpsSamplesAsync(List<LiveSampleViewModel> liveSamples)
@@ -353,7 +398,7 @@ namespace PaxCounterWeb.Controllers
             var gpsRows = await _db.GpsSamples
                 .Where(g => g.Timestamp >= oldest)
                 .OrderBy(g => g.Timestamp)
-                .Select(g => new { g.Timestamp, g.Latitude, g.Longitude })
+                .Select(g => new { g.Timestamp, g.Latitude, g.Longitude, g.SourceTopic })
                 .ToListAsync();
 
             if (gpsRows.Count == 0)
@@ -361,23 +406,18 @@ namespace PaxCounterWeb.Controllers
                 return;
             }
 
-            var idx = 0;
             var maxAge = TimeSpan.FromMinutes(30);
 
             foreach (var row in withoutGps)
             {
-                while (idx + 1 < gpsRows.Count && gpsRows[idx + 1].Timestamp <= row.Timestamp)
-                {
-                    idx++;
-                }
+                var preferredTopics = ResolvePreferredGpsTopics(row.SourceChannel);
+                var candidate = gpsRows
+                    .Where(g => g.Timestamp <= row.Timestamp && row.Timestamp - g.Timestamp <= maxAge)
+                    .OrderBy(g => PreferredTopicRank(g.SourceTopic, preferredTopics))
+                    .ThenByDescending(g => g.Timestamp)
+                    .FirstOrDefault();
 
-                var candidate = gpsRows[idx];
-                if (candidate.Timestamp > row.Timestamp)
-                {
-                    continue;
-                }
-
-                if (row.Timestamp - candidate.Timestamp > maxAge)
+                if (candidate == null)
                 {
                     continue;
                 }
@@ -385,32 +425,88 @@ namespace PaxCounterWeb.Controllers
                 row.Latitude = candidate.Latitude;
                 row.Longitude = candidate.Longitude;
                 row.SourceChannel = string.IsNullOrWhiteSpace(row.SourceChannel)
-                    ? "GPS join"
-                    : $"{row.SourceChannel} + GPS join";
+                    ? $"GPS join ({DescribeGpsSource(candidate.SourceTopic)})"
+                    : $"{row.SourceChannel} + GPS join ({DescribeGpsSource(candidate.SourceTopic)})";
             }
+        }
+
+        private static string[] ResolvePreferredGpsTopics(string? sourceChannel)
+        {
+            if (!string.IsNullOrWhiteSpace(sourceChannel) && sourceChannel.Contains("LoRa/TTN", StringComparison.OrdinalIgnoreCase))
+            {
+                return new[] { "lora/direct" };
+            }
+
+            if (!string.IsNullOrWhiteSpace(sourceChannel) && sourceChannel.Contains("via A52", StringComparison.OrdinalIgnoreCase))
+            {
+                return new[] { "phone/direct/a52", "phone/direct/s23", "phone/gps/a52", "ha:device_tracker.sm_a528b_star_telefon", "phone/gps", "phone/gps/s23", "ha:device_tracker.sm_s911b" };
+            }
+
+            return new[] { "phone/direct/s23", "phone/direct/a52", "phone/gps/s23", "ha:device_tracker.sm_s911b", "phone/gps", "phone/gps/a52", "ha:device_tracker.sm_a528b_star_telefon" };
+        }
+
+        private static int PreferredTopicRank(string? sourceTopic, string[] preferredTopics)
+        {
+            if (string.IsNullOrWhiteSpace(sourceTopic))
+            {
+                return preferredTopics.Length + 10;
+            }
+
+            for (var i = 0; i < preferredTopics.Length; i++)
+            {
+                if (string.Equals(sourceTopic, preferredTopics[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return preferredTopics.Length + 5;
+        }
+
+        private static string DescribeGpsSource(string? sourceTopic)
+        {
+            return sourceTopic switch
+            {
+                "phone/direct/a52" => "A52 Direct GPS",
+            "phone/direct/s23" => "S23 Direct GPS",
+            "phone/gps/a52" => "A52",
+                "phone/gps/s23" => "S23",
+                "ha:device_tracker.sm_a528b_star_telefon" => "A52 HA",
+                "ha:device_tracker.sm_s911b" => "S23 HA",
+                _ => "MQTT"
+            };
         }
 
         [HttpGet("/live/{deviceId}")]
         public async Task<IActionResult> Live(string deviceId)
         {
+            var canonicalDeviceId = NormalizeHeltecAlias(deviceId);
+            var aliasIds = GetHeltecAliases(canonicalDeviceId);
             var device = await _db.Devices
-                .FirstOrDefaultAsync(d => d.DeviceId == deviceId);
+                .Where(d => aliasIds.Contains(d.DeviceId))
+                .OrderByDescending(d => d.DeviceId == canonicalDeviceId)
+                .FirstOrDefaultAsync();
 
             if (device == null)
             {
                 return NotFound($"Device '{deviceId}' not found");
             }
 
+            var aliasDeviceEntityIds = await _db.Devices
+                .Where(d => aliasIds.Contains(d.DeviceId))
+                .Select(d => d.Id)
+                .ToListAsync();
+
             var nowUtc = DateTime.UtcNow;
             var dayStartUtc = nowUtc.Date;
             var lastSeenUtc = await _db.PaxSamples
-                .Where(p => p.DeviceId == device.Id)
+                .Where(p => aliasDeviceEntityIds.Contains(p.DeviceId))
                 .OrderByDescending(p => p.Timestamp)
                 .Select(p => (DateTime?)p.Timestamp)
                 .FirstOrDefaultAsync();
 
             var latest = await _db.PaxSamples
-                .Where(p => p.DeviceId == device.Id)
+                .Where(p => aliasDeviceEntityIds.Contains(p.DeviceId))
                 .OrderByDescending(p => p.Timestamp)
                 .Select(p => new { p.BleCount, p.WifiCount })
                 .FirstOrDefaultAsync();
@@ -421,16 +517,17 @@ namespace PaxCounterWeb.Controllers
                 .AverageAsync() ?? 0d;
 
             var peakBleToday = await _db.PaxSamples
-                .Where(p => p.DeviceId == device.Id && p.Timestamp >= dayStartUtc)
+                .Where(p => aliasDeviceEntityIds.Contains(p.DeviceId) && p.Timestamp >= dayStartUtc)
                 .Select(p => (int?)p.BleCount)
                 .MaxAsync() ?? 0;
 
             var vm = new LiveDevicePageViewModel
             {
-                DeviceId = device.DeviceId,
-                DeviceName = string.IsNullOrWhiteSpace(device.Name) ? device.DeviceId : device.Name,
+                DeviceId = canonicalDeviceId,
+                DeviceName = ResolveCanonicalDisplayName(device.DeviceId, device.Name),
                 LatestBle = latest?.BleCount ?? 0,
                 LatestWifi = latest?.WifiCount ?? 0,
+                ShowWifiCounts = _uiFeatureSettingsService.GetShowWifiCounts(),
                 AvgBle15m = avgBle15m,
                 PeakBleToday = peakBleToday,
                 LastSeenUtc = lastSeenUtc
@@ -450,10 +547,14 @@ namespace PaxCounterWeb.Controllers
             minutes = Math.Clamp(minutes, 15, 43200);
             bucketMinutes = Math.Clamp(bucketMinutes, 1, 60);
 
-            var device = await _db.Devices
-                .FirstOrDefaultAsync(d => d.DeviceId == deviceId);
+            var canonicalDeviceId = NormalizeHeltecAlias(deviceId);
+            var aliasIds = GetHeltecAliases(canonicalDeviceId);
+            var aliasDeviceEntityIds = await _db.Devices
+                .Where(d => aliasIds.Contains(d.DeviceId))
+                .Select(d => d.Id)
+                .ToListAsync();
 
-            if (device == null)
+            if (aliasDeviceEntityIds.Count == 0)
             {
                 return NotFound($"Device '{deviceId}' not found");
             }
@@ -463,7 +564,7 @@ namespace PaxCounterWeb.Controllers
             var dayStartUtc = nowUtc.Date;
 
             var rawSamples = await _db.PaxSamples
-                .Where(p => p.DeviceId == device.Id && p.Timestamp >= sinceUtc)
+                .Where(p => aliasDeviceEntityIds.Contains(p.DeviceId) && p.Timestamp >= sinceUtc)
                 .OrderBy(p => p.Timestamp)
                 .Select(p => new { p.Timestamp, p.BleCount, p.WifiCount })
                 .ToListAsync();
@@ -476,13 +577,13 @@ namespace PaxCounterWeb.Controllers
                 .Average();
 
             var peakBleToday = await _db.PaxSamples
-                .Where(p => p.DeviceId == device.Id && p.Timestamp >= dayStartUtc)
+                .Where(p => aliasDeviceEntityIds.Contains(p.DeviceId) && p.Timestamp >= dayStartUtc)
                 .Select(p => (int?)p.BleCount)
                 .MaxAsync() ?? 0;
 
             var bucketTicks = TimeSpan.FromMinutes(bucketMinutes).Ticks;
             var points = rawSamples
-                .GroupBy(p => new DateTime((p.Timestamp.Ticks / bucketTicks) * bucketTicks, DateTimeKind.Utc))
+                .GroupBy(p => new DateTime(((long)(p.Timestamp.Ticks / bucketTicks)) * bucketTicks, DateTimeKind.Utc))
                 .OrderBy(g => g.Key)
                 .Select(g => new BleSeriesPointViewModel
                 {
@@ -495,11 +596,12 @@ namespace PaxCounterWeb.Controllers
 
             var response = new BleMetricsResponseViewModel
             {
-                DeviceId = device.DeviceId,
+                DeviceId = canonicalDeviceId,
                 Minutes = minutes,
                 BucketMinutes = bucketMinutes,
                 LatestBle = latest?.BleCount ?? 0,
                 LatestWifi = latest?.WifiCount ?? 0,
+                ShowWifiCounts = _uiFeatureSettingsService.GetShowWifiCounts(),
                 AvgBle15m = Math.Round(avgBle15m, 2),
                 PeakBleToday = peakBleToday,
                 LastSeenUtc = latest?.Timestamp,
@@ -513,16 +615,20 @@ namespace PaxCounterWeb.Controllers
         public async Task<IActionResult> Compare()
         {
             var deviceIds = await _db.Devices
-                .Where(d => !d.IsHidden)
-                .Select(d => d.DeviceId)
-                .Where(id => !string.IsNullOrWhiteSpace(id))
-                .Distinct()
-                .OrderBy(id => id)
+                .Where(d => !d.IsHidden && !string.IsNullOrWhiteSpace(d.DeviceId))
+                .Select(d => new DeviceOptionViewModel
+                {
+                    DeviceId = NormalizeHeltecAlias(d.DeviceId),
+                    DisplayName = ResolveCanonicalDisplayName(d.DeviceId, d.Name)
+                })
                 .ToListAsync();
 
             var vm = new ComparePageViewModel
             {
                 DeviceIds = deviceIds
+                    .DistinctBy(d => d.DeviceId)
+                    .OrderBy(d => d.DisplayName)
+                    .ToList()
             };
 
             return View(vm);
@@ -549,6 +655,7 @@ namespace PaxCounterWeb.Controllers
                 TempData["CommandError"] = result.Message;
             }
 
+            UpdateTrackerModeFromInterval(seconds);
             return RedirectToAction(nameof(Index));
         }
 
@@ -557,6 +664,113 @@ namespace PaxCounterWeb.Controllers
         public async Task<IActionResult> SetReportingIntervalForAll(int seconds)
         {
             var result = await _deviceCommandService.QueueSendCycleForAllAsync(seconds, HttpContext.RequestAborted);
+            if (result.Success)
+            {
+                TempData["CommandStatus"] = result.Message;
+            }
+            else
+            {
+                TempData["CommandError"] = result.Message;
+            }
+
+            UpdateTrackerModeFromInterval(seconds);
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> SetRssiLimit(int deviceEntityId, int rssiLimit)
+        {
+            if (!_uiFeatureSettingsService.GetRlimControlsEnabled())
+            {
+                TempData["CommandError"] = "RLIM OTA controls are disabled in Settings.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            var device = await _db.Devices.FirstOrDefaultAsync(d => d.Id == deviceEntityId && !d.IsHidden);
+            if (device == null)
+            {
+                TempData["CommandError"] = "Device not found.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            var result = await _deviceCommandService.QueueRssiLimitAsync(device, rssiLimit, HttpContext.RequestAborted);
+            if (result.Success)
+            {
+                TempData["CommandStatus"] = result.Message;
+            }
+            else
+            {
+                TempData["CommandError"] = result.Message;
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> SetRssiLimitForAll(int rssiLimit)
+        {
+            if (!_uiFeatureSettingsService.GetRlimControlsEnabled())
+            {
+                TempData["CommandError"] = "RLIM OTA controls are disabled in Settings.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            var result = await _deviceCommandService.QueueRssiLimitForAllAsync(rssiLimit, HttpContext.RequestAborted);
+            if (result.Success)
+            {
+                TempData["CommandStatus"] = result.Message;
+            }
+            else
+            {
+                TempData["CommandError"] = result.Message;
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> SetBleScanInterval(int deviceEntityId, int intervalMilliseconds)
+        {
+            if (!_uiFeatureSettingsService.GetBleScanControlsEnabled())
+            {
+                TempData["CommandError"] = "BLE scan OTA controls are disabled in Settings.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            var device = await _db.Devices.FirstOrDefaultAsync(d => d.Id == deviceEntityId && !d.IsHidden);
+            if (device == null)
+            {
+                TempData["CommandError"] = "Device not found.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            var result = await _deviceCommandService.QueueBleScanIntervalAsync(device, intervalMilliseconds, HttpContext.RequestAborted);
+            if (result.Success)
+            {
+                TempData["CommandStatus"] = result.Message;
+            }
+            else
+            {
+                TempData["CommandError"] = result.Message;
+            }
+
+            return RedirectToAction(nameof(Index));
+        }
+
+        [HttpPost]
+        [ValidateAntiForgeryToken]
+        public async Task<IActionResult> SetBleScanIntervalForAll(int intervalMilliseconds)
+        {
+            if (!_uiFeatureSettingsService.GetBleScanControlsEnabled())
+            {
+                TempData["CommandError"] = "BLE scan OTA controls are disabled in Settings.";
+                return RedirectToAction(nameof(Index));
+            }
+
+            var result = await _deviceCommandService.QueueBleScanIntervalForAllAsync(intervalMilliseconds, HttpContext.RequestAborted);
             if (result.Success)
             {
                 TempData["CommandStatus"] = result.Message;
@@ -639,8 +853,73 @@ namespace PaxCounterWeb.Controllers
         {
             return View(new ErrorViewModel { RequestId = Activity.Current?.Id ?? HttpContext.TraceIdentifier });
         }
+
+        private static string NormalizeHeltecAlias(string deviceId)
+        {
+            if (string.IsNullOrWhiteSpace(deviceId))
+            {
+                return string.Empty;
+            }
+
+            return deviceId.Trim().ToLowerInvariant() switch
+            {
+                "heltec-tracker1" => "heltec1-new",
+                "paxcounter-heltec1" => "heltec1-new",
+                "paxcounter_aa8130d5" => "heltec1-new",
+                "heltec1-new" => "heltec1-new",
+                "heltec-tracker2" => "heltec2-new",
+                "paxcounter-heltec2" => "heltec2-new",
+                "paxcounter_b2faeaf2" => "heltec2-new",
+                "heltec2-new" => "heltec2-new",
+                _ => deviceId.Trim()
+            };
+        }
+
+        private static List<string> GetHeltecAliases(string canonicalDeviceId)
+        {
+            return canonicalDeviceId.ToLowerInvariant() switch
+            {
+                "heltec1-new" => new List<string>
+                {
+                    "heltec1-new",
+                    "paxcounter_aa8130d5",
+                    "paxcounter-heltec1",
+                    "heltec-tracker1"
+                },
+                "heltec2-new" => new List<string>
+                {
+                    "heltec2-new",
+                    "paxcounter_b2faeaf2",
+                    "paxcounter-heltec2",
+                    "heltec-tracker2"
+                },
+                _ => new List<string> { canonicalDeviceId }
+            };
+        }
+
+        private static string ResolveCanonicalDisplayName(string deviceId, string? fallbackName)
+        {
+            return NormalizeHeltecAlias(deviceId).ToLowerInvariant() switch
+            {
+                "heltec1-new" => "Heltec1",
+                "heltec2-new" => "Heltec2",
+                _ => string.IsNullOrWhiteSpace(fallbackName) ? deviceId : fallbackName
+            };
+        }
+
+        private void UpdateTrackerModeFromInterval(int seconds)
+        {
+            var settings = _trackerHomeModeSettingsService.GetSettings();
+            var normalizedSeconds = Math.Clamp(seconds, 10, 3600);
+            var nextMode = normalizedSeconds >= Math.Clamp(settings.HomeIntervalSeconds, 30, 3600)
+                ? "home"
+                : "away";
+            _trackerHomeModeSettingsService.SetCurrentMode(nextMode);
+        }
     }
 }
+
+
 
 
 

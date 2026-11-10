@@ -14,12 +14,14 @@ public class TtnWebhookController : ControllerBase
     private readonly AppDbContext _db;
     private readonly IConfiguration _config;
     private readonly WebhookLogStore _logStore;
+    private readonly FootfallRelayService _footfallRelayService;
 
-    public TtnWebhookController(AppDbContext db, IConfiguration config, WebhookLogStore logStore)
+    public TtnWebhookController(AppDbContext db, IConfiguration config, WebhookLogStore logStore, FootfallRelayService footfallRelayService)
     {
         _db = db;
         _config = config;
         _logStore = logStore;
+        _footfallRelayService = footfallRelayService;
     }
 
     [HttpPost("uplink")]
@@ -53,27 +55,9 @@ public class TtnWebhookController : ControllerBase
                 return BadRequest("Missing device identifiers");
             }
 
+            deviceId = CanonicalizeDeviceId(devEui, deviceId);
+
             var timestamp = GetTimestamp(payloadRoot);
-
-            var device = _db.Devices.FirstOrDefault(d => d.DeviceUid == devEui);
-            if (device == null)
-            {
-                device = new Device
-                {
-                    DeviceUid = devEui,
-                    DeviceId = deviceId,
-                    Name = deviceId
-                };
-
-                if (TryGetGatewayLocation(data, out var lat, out var lng))
-                {
-                    device.Latitude = lat;
-                    device.Longitude = lng;
-                }
-
-                _db.Devices.Add(device);
-                await SqliteWriteHelper.SaveChangesWithRetryAsync(_db, ct);
-            }
 
             if (!TryGetProperty(payloadRoot, "uplink_message", out var uplink))
             {
@@ -133,6 +117,52 @@ public class TtnWebhookController : ControllerBase
                 decodeSource = "decoded_payload.bytes";
             }
 
+            if (_footfallRelayService.IsConfigured && _footfallRelayService.ShouldRelay(deviceId, devEui))
+            {
+                await _footfallRelayService.RelayAsync(new FootfallRelayRequest
+                {
+                    DeviceId = deviceId,
+                    DeviceUid = devEui,
+                    TimestampUtc = timestamp,
+                    BleCount = ble,
+                    WifiCount = wifi,
+                    Latitude = latitude,
+                    Longitude = longitude,
+                    SourceChannel = "LoRa/TTN"
+                }, ct);
+
+                _logStore.Add(new WebhookLogEntry
+                {
+                    Status = "Relayed",
+                    EventName = GetString(body, "name"),
+                    DeviceId = deviceId,
+                    DevEui = devEui,
+                    Message = $"Footfall relay src={decodeSource} wifi={wifi} ble={ble}"
+                });
+
+                return Ok();
+            }
+
+            var device = _db.Devices.FirstOrDefault(d => d.DeviceUid == devEui);
+            if (device == null)
+            {
+                device = new Device
+                {
+                    DeviceUid = devEui,
+                    DeviceId = deviceId,
+                    Name = deviceId
+                };
+
+                if (TryGetGatewayLocation(data, out var lat, out var lng))
+                {
+                    device.Latitude = lat;
+                    device.Longitude = lng;
+                }
+
+                _db.Devices.Add(device);
+                await SqliteWriteHelper.SaveChangesWithRetryAsync(_db, ct);
+            }
+
             if (batteryMv == null || batteryPct == null)
             {
                 var lastWithBattery = _db.PaxSamples
@@ -167,6 +197,23 @@ public class TtnWebhookController : ControllerBase
                 };
 
                 _db.PaxSamples.Add(sample);
+                if (latitude.HasValue && longitude.HasValue)
+                {
+                    _db.TrackerPositions.Add(new TrackerPosition
+                    {
+                        DeviceId = device.Id,
+                        TimestampUtc = timestamp,
+                        Latitude = latitude.Value,
+                        Longitude = longitude.Value,
+                        Altitude = altitude,
+                        Satellites = satellites,
+                        Hdop = hdop,
+                        BatteryVoltageMv = batteryMv,
+                        BatteryPercent = batteryPct,
+                        SourceChannel = "LoRa/TTN"
+                    });
+                }
+
                 await SqliteWriteHelper.SaveChangesWithRetryAsync(_db, ct);
             }
 
@@ -203,6 +250,26 @@ public class TtnWebhookController : ControllerBase
             });
             return Ok();
         }
+    }
+
+    private static string CanonicalizeDeviceId(string? devEui, string deviceId)
+    {
+        return NormalizeId(devEui) switch
+        {
+            "e8f60a80951cfeff" => "paxcounter-T3S3A",
+            "e8f60a809228feff" => "paxcounter-T3S3B",
+            _ => deviceId
+        };
+    }
+
+    private static string NormalizeId(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        return new string(value.Trim().Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
     }
 
     private static string GetString(JsonElement obj, string prop)
@@ -526,3 +593,4 @@ public class TtnWebhookController : ControllerBase
         return true;
     }
 }
+

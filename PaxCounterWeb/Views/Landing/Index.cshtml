@@ -1,0 +1,201 @@
+@{
+    ViewData["Title"] = "PaxCounter Live";
+}
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+<section class="live-landing">
+    <div class="live-hero">
+        <div>
+            <div class="live-eyebrow">PAXCOUNTER · LIVE</div>
+            <h1>People nearby, right now.</h1>
+            <p id="liveSubline" class="live-subline">Connecting to counters…</p>
+        </div>
+        <a class="btn live-detail-link" href="/tracking">Open full tracking</a>
+    </div>
+
+    <div class="live-metric" id="liveMetric" aria-live="polite">
+        <div class="live-metric-label">CURRENT BLE MAX</div>
+        <div class="live-metric-value"><span id="maxBle">—</span><span class="live-metric-unit">BLE</span></div>
+        <div class="live-metric-meta">
+            <span id="maxDevice">Waiting for a counter</span>
+            <span class="live-dot">•</span>
+            <span id="maxAge">—</span>
+        </div>
+        <div class="live-trend" aria-label="Maximum BLE trend for the last two hours">
+            <div class="live-trend-header"><span>MAX GRAPH</span><span>LAST 2 HOURS</span></div>
+            <svg id="maxTrend" viewBox="0 0 600 72" preserveAspectRatio="none" role="img" aria-label="BLE maximum trend">
+                <path id="trendArea" class="live-trend-area"></path>
+                <polyline id="trendLine" class="live-trend-line" points=""></polyline>
+            </svg>
+        </div>
+    </div>
+
+    <div class="live-map-card">
+        <div class="live-map-toolbar">
+            <div>
+                <div class="live-map-title">Live route &amp; BLE signal</div>
+                <div class="live-map-caption">Last 2 hours · map refreshes every 10 seconds</div>
+            </div>
+            <div class="live-map-actions">
+                <button id="centerMap" type="button" class="btn btn-sm btn-outline-secondary">Center route</button>
+                <a class="btn btn-sm btn-outline-primary" href="/tracking?minutes=120">Details</a>
+            </div>
+        </div>
+        <div id="landingMap" aria-label="PaxCounter live tracking map"></div>
+        <div class="live-legend">
+            <span><i class="legend-dot legend-low"></i>0 BLE</span>
+            <span><i class="legend-dot legend-mid"></i>medium</span>
+            <span><i class="legend-dot legend-high"></i>peak</span>
+            <span id="mapStatus" class="live-map-status">Loading route…</span>
+        </div>
+    </div>
+</section>
+
+@section Scripts {
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+    const map = L.map('landingMap', { zoomControl: false, zoomSnap: 0.25, zoomDelta: 0.25 }).setView([46.0569, 14.5058], 13);
+    L.control.zoom({ position: 'bottomright' }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxNativeZoom: 19,
+        maxZoom: 22,
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    const routeLayer = L.layerGroup().addTo(map);
+    const maxBleEl = document.getElementById('maxBle');
+    const maxDeviceEl = document.getElementById('maxDevice');
+    const maxAgeEl = document.getElementById('maxAge');
+    const sublineEl = document.getElementById('liveSubline');
+    const metricEl = document.getElementById('liveMetric');
+    const mapStatusEl = document.getElementById('mapStatus');
+    let lastBounds = null;
+    let hasFitted = false;
+
+    function ageText(timestamp) {
+        if (!timestamp) return 'no recent sample';
+        const seconds = Math.max(0, Math.round((Date.now() - new Date(timestamp).getTime()) / 1000));
+        if (seconds < 60) return `${seconds}s ago`;
+        if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+        return `${Math.floor(seconds / 3600)}h ago`;
+    }
+
+    function renderTrend(trend) {
+        const points = Array.isArray(trend) ? trend : [];
+        const line = document.getElementById('trendLine');
+        const area = document.getElementById('trendArea');
+        if (!points.length) {
+            line.setAttribute('points', '');
+            area.setAttribute('d', '');
+            return;
+        }
+
+        const width = 600;
+        const height = 72;
+        const peak = Math.max(1, ...points.map(p => Number(p.ble || 0)));
+        const coords = points.map((point, index) => {
+            const x = points.length === 1 ? width / 2 : (index / (points.length - 1)) * width;
+            const y = height - 7 - (Number(point.ble || 0) / peak) * (height - 18);
+            return [x.toFixed(1), y.toFixed(1)];
+        });
+        line.setAttribute('points', coords.map(pair => pair.join(',')).join(' '));
+        area.setAttribute('d', `M ${coords[0].join(' ')} L ${coords.map(pair => pair.join(' ')).join(' L ')} L ${width} ${height} L 0 ${height} Z`);
+    }
+    function colorFor(ble, peak) {
+        const ratio = peak <= 0 ? 0 : Number(ble || 0) / peak;
+        if (ratio < 0.34) return '#36a46e';
+        if (ratio < 0.67) return '#e6a21a';
+        return '#e0533d';
+    }
+
+    function popup(point) {
+        return `<strong>${point.deviceId || 'Pax counter'}</strong><br>${Number(point.ble || 0)} BLE · ${ageText(point.timestampUtc)}<br><span class="text-muted">${point.sourceTopic || 'GPS joined'}</span>`;
+    }
+
+    function renderRoute(points, fit) {
+        routeLayer.clearLayers();
+        const byDevice = new Map();
+        for (const point of points) {
+            if (!Number.isFinite(Number(point.lat)) || !Number.isFinite(Number(point.lon))) continue;
+            const key = point.deviceId || 'gps';
+            if (!byDevice.has(key)) byDevice.set(key, []);
+            byDevice.get(key).push(point);
+        }
+
+        const bounds = [];
+        const peak = Math.max(0, ...points.map(p => Number(p.ble || 0)));
+        for (const devicePoints of byDevice.values()) {
+            devicePoints.sort((a, b) => new Date(a.timestampUtc) - new Date(b.timestampUtc));
+            for (let i = 0; i < devicePoints.length; i++) {
+                const point = devicePoints[i];
+                const coords = [Number(point.lat), Number(point.lon)];
+                bounds.push(coords);
+                L.circleMarker(coords, {
+                    radius: 5 + Math.min(7, Math.sqrt(Math.max(0, Number(point.ble || 0))) * 1.6),
+                    color: '#ffffff', weight: 1.5,
+                    fillColor: colorFor(point.ble, peak), fillOpacity: 0.9
+                }).bindPopup(popup(point)).addTo(routeLayer);
+
+                if (i > 0) {
+                    const previous = devicePoints[i - 1];
+                    const elapsed = new Date(point.timestampUtc) - new Date(previous.timestampUtc);
+                    const distance = map.distance([Number(previous.lat), Number(previous.lon)], coords);
+                    if (elapsed > 0 && elapsed <= 20 * 60 * 1000 && distance / (elapsed / 1000) < 75) {
+                        L.polyline([[Number(previous.lat), Number(previous.lon)], coords], {
+                            color: colorFor(previous.ble, peak), weight: 4, opacity: 0.72
+                        }).addTo(routeLayer);
+                    }
+                }
+            }
+        }
+
+        lastBounds = bounds.length ? L.latLngBounds(bounds) : null;
+        if (fit && lastBounds) {
+            map.fitBounds(lastBounds, { padding: [28, 28], maxZoom: 17 });
+            hasFitted = true;
+        }
+        mapStatusEl.textContent = points.length ? `${points.length} mapped points` : 'No route points yet';
+    }
+
+    async function refreshLive() {
+        try {
+            const response = await fetch('/landing/api/live', { cache: 'no-store' });
+            if (!response.ok) throw new Error('Live data unavailable');
+            const data = await response.json();
+            maxBleEl.textContent = String(data.maxBle ?? 0);
+            maxDeviceEl.textContent = data.maxDevice || 'Waiting for a counter';
+            maxAgeEl.textContent = ageText(data.maxTimestampUtc);
+            sublineEl.textContent = `${data.activeDevices || 0} active counter${data.activeDevices === 1 ? '' : 's'} · updated ${new Date(data.generatedAtUtc).toLocaleTimeString()}`;
+            metricEl.classList.toggle('is-stale', Boolean(data.isStale));
+            renderTrend(data.trend);
+        } catch {
+            sublineEl.textContent = 'Live counters are temporarily unavailable.';
+            metricEl.classList.add('is-stale');
+        }
+    }
+
+    async function refreshMap() {
+        try {
+            const response = await fetch('/tracking/api/track?minutes=120', { cache: 'no-store' });
+            if (!response.ok) throw new Error('Track unavailable');
+            renderRoute(await response.json(), !hasFitted);
+        } catch {
+            mapStatusEl.textContent = 'Route data is temporarily unavailable';
+        }
+    }
+
+    document.getElementById('centerMap').addEventListener('click', () => {
+        if (lastBounds) map.fitBounds(lastBounds, { padding: [28, 28], maxZoom: 17 });
+    });
+
+    document.body.classList.add('live-landing-active');
+    refreshLive();
+    refreshMap();
+    window.setInterval(refreshLive, 10000);
+    window.setInterval(refreshMap, 10000);
+})();
+</script>
+}
+

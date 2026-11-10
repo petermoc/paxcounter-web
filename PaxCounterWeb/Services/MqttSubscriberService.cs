@@ -17,6 +17,8 @@ public class MqttSubscriberService : BackgroundService
     private readonly IConfiguration _config;
     private readonly TrackStore _trackStore;
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly object _pendingGpsJumpLock = new();
+    private readonly Dictionary<string, PendingGpsJumpCandidate> _pendingGpsJumpCandidates = new(StringComparer.OrdinalIgnoreCase);
     private IMqttClient? _client;
 
     public MqttSubscriberService(
@@ -106,11 +108,30 @@ public class MqttSubscriberService : BackgroundService
             }
         };
 
-        await _client.ConnectAsync(options, stoppingToken);
-        await _client.SubscribeAsync(gpsTopic, MQTTnet.Protocol.MqttQualityOfServiceLevel.AtMostOnce, stoppingToken);
-        await _client.SubscribeAsync(paxTopic, MQTTnet.Protocol.MqttQualityOfServiceLevel.AtMostOnce, stoppingToken);
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!_client.IsConnected)
+                {
+                    await _client.ConnectAsync(options, stoppingToken);
+                    await _client.SubscribeAsync(gpsTopic, MQTTnet.Protocol.MqttQualityOfServiceLevel.AtMostOnce, stoppingToken);
+                    await _client.SubscribeAsync(paxTopic, MQTTnet.Protocol.MqttQualityOfServiceLevel.AtMostOnce, stoppingToken);
+                    _logger.LogInformation("MQTT subscriber started. Topics: {Gps} and {Pax}", gpsTopic, paxTopic);
+                }
 
-        _logger.LogInformation("MQTT subscriber started. Topics: {Gps} and {Pax}", gpsTopic, paxTopic);
+                break;
+            }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Initial MQTT connect failed. Retrying in 5s...");
+                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+            }
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -134,20 +155,176 @@ public class MqttSubscriberService : BackgroundService
         return topic;
     }
 
+    private static double HaversineMeters(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double earthRadiusMeters = 6371000d;
+        var dLat = DegreesToRadians(lat2 - lat1);
+        var dLon = DegreesToRadians(lon2 - lon1);
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+                Math.Cos(DegreesToRadians(lat1)) * Math.Cos(DegreesToRadians(lat2)) *
+                Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+        var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+        return earthRadiusMeters * c;
+    }
+
+    private static double DegreesToRadians(double degrees) => degrees * Math.PI / 180d;
+
     private async Task PersistGpsSampleAsync(GpsMessage gps, string topic)
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var gpsService = scope.ServiceProvider.GetService<PhoneGpsService>();
 
-        db.GpsSamples.Add(new GpsSample
+        var resolvedTopic = topic;
+        if (gpsService != null)
         {
-            Timestamp = DateTime.UtcNow,
+            try
+            {
+                resolvedTopic = await gpsService.ResolveGpsSourceTopicAsync(gps, topic, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Unable to resolve GPS phone source; keeping topic {Topic}.", topic);
+            }
+        }
+
+        var timestampUtc = DateTime.UtcNow;
+        var currentSample = new GpsSample
+        {
+            Timestamp = timestampUtc,
             Latitude = gps.lat,
             Longitude = gps.lon,
             Accuracy = gps.accuracy,
-            SourceTopic = topic
-        });
+            SourceTopic = resolvedTopic
+        };
 
+        var previousSample = await db.GpsSamples
+            .AsNoTracking()
+            .Where(g => g.SourceTopic == resolvedTopic)
+            .OrderByDescending(g => g.Timestamp)
+            .FirstOrDefaultAsync();
+
+        if (previousSample != null)
+        {
+            var secondsSincePrevious = (timestampUtc - previousSample.Timestamp).TotalSeconds;
+            if (secondsSincePrevious > 0)
+            {
+                var distanceMeters = HaversineMeters(previousSample.Latitude, previousSample.Longitude, gps.lat, gps.lon);
+                var speedKmh = (distanceMeters / secondsSincePrevious) * 3.6d;
+                if (speedKmh > 250d)
+                {
+                    _logger.LogWarning(
+                        "Rejected implausible GPS jump for {SourceTopic}: prev=({PrevLat},{PrevLon}) new=({Lat},{Lon}) dt={Seconds}s speed={SpeedKmh}km/h acc={Accuracy}",
+                        resolvedTopic,
+                        previousSample.Latitude,
+                        previousSample.Longitude,
+                        gps.lat,
+                        gps.lon,
+                        Math.Round(secondsSincePrevious, 1),
+                        Math.Round(speedKmh, 1),
+                        gps.accuracy);
+                    return;
+                }
+            }
+
+            if (TryHandlePendingGpsJump(db, resolvedTopic, previousSample, currentSample))
+            {
+                await SaveGpsChangesAsync(db);
+                return;
+            }
+        }
+        else
+        {
+            ClearPendingGpsJump(resolvedTopic);
+        }
+
+        db.GpsSamples.Add(currentSample);
+        await SaveGpsChangesAsync(db);
+    }
+
+    private bool TryHandlePendingGpsJump(AppDbContext db, string sourceTopic, GpsSample previousSample, GpsSample currentSample)
+    {
+        if (!ShouldRequireJumpConfirmation(sourceTopic, previousSample, currentSample, out var distanceMeters))
+        {
+            ClearPendingGpsJump(sourceTopic);
+            return false;
+        }
+
+        lock (_pendingGpsJumpLock)
+        {
+            if (_pendingGpsJumpCandidates.TryGetValue(sourceTopic, out var pendingCandidate))
+            {
+                if ((currentSample.Timestamp - pendingCandidate.TimestampUtc).TotalMinutes <= 15 &&
+                    HaversineMeters(pendingCandidate.Latitude, pendingCandidate.Longitude, currentSample.Latitude, currentSample.Longitude) <= 300d)
+                {
+                    _pendingGpsJumpCandidates.Remove(sourceTopic);
+                    db.GpsSamples.Add(new GpsSample
+                    {
+                        Timestamp = pendingCandidate.TimestampUtc,
+                        Latitude = pendingCandidate.Latitude,
+                        Longitude = pendingCandidate.Longitude,
+                        Accuracy = pendingCandidate.Accuracy,
+                        SourceTopic = sourceTopic
+                    });
+                    db.GpsSamples.Add(currentSample);
+                    _logger.LogInformation(
+                        "Confirmed pending GPS jump for {SourceTopic}: ({Lat},{Lon}) then ({CurrentLat},{CurrentLon})",
+                        sourceTopic,
+                        pendingCandidate.Latitude,
+                        pendingCandidate.Longitude,
+                        currentSample.Latitude,
+                        currentSample.Longitude);
+                    return true;
+                }
+            }
+
+            _pendingGpsJumpCandidates[sourceTopic] = new PendingGpsJumpCandidate
+            {
+                TimestampUtc = currentSample.Timestamp,
+                Latitude = currentSample.Latitude,
+                Longitude = currentSample.Longitude,
+                Accuracy = currentSample.Accuracy,
+                PreviousTimestampUtc = previousSample.Timestamp,
+                PreviousLatitude = previousSample.Latitude,
+                PreviousLongitude = previousSample.Longitude,
+                DistanceMeters = distanceMeters
+            };
+        }
+
+        _logger.LogWarning(
+            "Holding unconfirmed GPS jump for {SourceTopic}: prev=({PrevLat},{PrevLon}) candidate=({Lat},{Lon}) distance={DistanceMeters}m acc={Accuracy}",
+            sourceTopic,
+            previousSample.Latitude,
+            previousSample.Longitude,
+            currentSample.Latitude,
+            currentSample.Longitude,
+            Math.Round(distanceMeters),
+            currentSample.Accuracy);
+        return true;
+    }
+
+    private static bool ShouldRequireJumpConfirmation(string sourceTopic, GpsSample previousSample, GpsSample currentSample, out double distanceMeters)
+    {
+        distanceMeters = HaversineMeters(previousSample.Latitude, previousSample.Longitude, currentSample.Latitude, currentSample.Longitude);
+        if (!sourceTopic.StartsWith("phone/gps", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var ageSeconds = (currentSample.Timestamp - previousSample.Timestamp).TotalSeconds;
+        return ageSeconds >= 120d && distanceMeters >= 3000d;
+    }
+
+    private void ClearPendingGpsJump(string sourceTopic)
+    {
+        lock (_pendingGpsJumpLock)
+        {
+            _pendingGpsJumpCandidates.Remove(sourceTopic);
+        }
+    }
+
+    private async Task SaveGpsChangesAsync(AppDbContext db)
+    {
         try
         {
             await SqliteWriteHelper.SaveChangesWithRetryAsync(db, CancellationToken.None);
@@ -157,4 +334,17 @@ public class MqttSubscriberService : BackgroundService
             _logger.LogWarning("SQLite locked while persisting GPS sample; skipping this point.");
         }
     }
+
+    private sealed class PendingGpsJumpCandidate
+    {
+        public DateTime TimestampUtc { get; init; }
+        public double Latitude { get; init; }
+        public double Longitude { get; init; }
+        public int? Accuracy { get; init; }
+        public DateTime PreviousTimestampUtc { get; init; }
+        public double PreviousLatitude { get; init; }
+        public double PreviousLongitude { get; init; }
+        public double DistanceMeters { get; init; }
+    }
 }
+

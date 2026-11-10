@@ -55,12 +55,13 @@
 
         <label class="form-label mb-1">Devices</label>
         <div class="row g-1 mb-3">
-            @foreach (var id in Model.DeviceIds)
+            @foreach (var device in Model.DeviceIds)
             {
+                var inputId = $"device_{device.DeviceId}";
                 <div class="col-12 col-md-6 col-lg-4">
                     <div class="form-check">
-                        <input class="form-check-input device-check" type="checkbox" id="device_@id" value="@id" checked>
-                        <label class="form-check-label" for="device_@id">@id</label>
+                        <input class="form-check-input device-check" type="checkbox" id="@inputId" value="@device.DeviceId" checked>
+                        <label class="form-check-label" for="@inputId">@device.DisplayName</label>
                     </div>
                 </div>
             }

@@ -1,19 +1,143 @@
 @model PaxCounterWeb.ViewModels.TrackingViewModel
 @{
-    ViewData["Title"] = "Tracking Map";
+    ViewData["Title"] = Model.PageTitle;
 }
 
 <div class="d-flex justify-content-between align-items-center mb-2">
-    <h2 class="mb-0">Tracking Map</h2>
+    <h2 class="mb-0">@Model.PageTitle</h2>
     <a class="btn btn-outline-secondary btn-sm" href="/">Back</a>
 </div>
 <div class="row g-2 mb-2">
-    <div class="col-12">
-        <div class="small text-muted">
-            Last GPS received at: <span id="lastGpsAtLocal">-</span>
-            (<span id="lastGpsAtUtc">-</span> UTC) |
-            Age: <span id="lastGpsAge">-</span> |
-            Clock drift: <span id="clockDrift">-</span>
+    <div class="col-12 col-xl-8">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body py-2 px-3">
+                <div class="d-flex flex-wrap justify-content-between align-items-start gap-2">
+                    <div>
+                        <div class="small text-uppercase text-muted fw-semibold">GPS Auto Mode</div>
+                        <div class="d-flex flex-wrap align-items-center gap-2 mt-1">
+                            <span class="badge @(Model.GpsAutoModeEnabled ? "text-bg-success" : "text-bg-secondary")">Auto mode @(Model.GpsAutoModeEnabled ? "ON" : "OFF")</span>
+                            <span class="badge @(Model.TrackerCurrentMode.Equals("home", StringComparison.OrdinalIgnoreCase) ? "text-bg-primary" : "text-bg-warning")">Current mode: @Model.TrackerCurrentMode.ToUpperInvariant()</span>
+                            @if (Model.TrackerModeIsManualOverride)
+                            {
+                                <span class="badge text-bg-dark">Manual override</span>
+                            }
+                            <span class="badge @(Model.ForceGpsConfigured ? "text-bg-info" : "text-bg-secondary")">Force GPS @(Model.ForceGpsConfigured ? "ready" : "not configured")</span>
+                        </div>
+                    </div>
+                    <div class="small text-muted">
+                        Home interval: <strong>@Model.HomeIntervalSeconds s</strong> | Away interval: <strong>@Model.AwayIntervalSeconds s</strong>
+                    </div>
+                </div>
+                <div class="small text-muted mt-2">
+                    Direct GPS auto-mode phone: <strong>@Model.AutoModeTrackerEntityId</strong><br />
+                    Home states: <strong>@Model.AutoModeHomeStatesSummary</strong><br />
+                    When auto mode is ON, this Direct GPS phone decides HOME vs AWAY. HOME uses the low-frequency interval with high accuracy off, AWAY uses the high-frequency interval with high accuracy on.
+                </div>
+                <div class="mt-2">
+                    <div class="small text-uppercase text-muted fw-semibold mb-1">GPS diagnostics</div>
+                    <div class="row g-2">
+                        <div class="col-12">
+                            <div class="p-2 rounded border border-secondary-subtle bg-light">
+                                <div class="small mt-1">
+                                    Active auto tracker: <strong>@Model.ActiveAutoModeTrackerEntityId</strong><br />
+                                    Active tracker state: <strong>@Model.ActiveAutoModeTrackerState</strong> | Age: <strong>@Model.ActiveAutoModeTrackerAge</strong><br />
+                                    GPS samples in window: <strong>@Model.GpsSampleCountInWindow</strong> | Accepted for map: <strong>@Model.GpsFilteredSampleCountInWindow</strong><br />
+                                    Hidden jump candidates: <strong>@Model.GpsHiddenJumpCountInWindow</strong><br />
+                                    Unique coordinates in window: <strong>@Model.GpsUniqueCoordinateCountInWindow</strong><br />
+                                    Coordinate changes in window: <strong>@Model.GpsMovementChangeCountInWindow</strong><br />
+                                    Dominant GPS topic: <strong>@Model.GpsWindowPrimaryTopic</strong><br />
+                                    Last raw GPS: <strong>@Model.GpsLastRawPointSummary</strong><br />
+                                    Last accepted map GPS: <strong>@Model.GpsLastAcceptedPointSummary</strong><br />
+                                    Last hidden jump: <strong>@Model.GpsLastHiddenJumpSummary</strong>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <div class="small text-uppercase text-muted fw-semibold mb-1">Direct GPS phone health</div>
+                    <div class="row g-2">
+                        @foreach (var tracker in Model.HaTrackers)
+                        {
+                            <div class="col-12 col-md-6">
+                                <div class="p-2 rounded @(tracker.IsStale ? "border border-danger bg-danger-subtle" : "border border-success bg-success-subtle")">
+                                    <div class="d-flex align-items-center gap-2 small text-uppercase fw-semibold @(tracker.IsStale ? "text-danger" : "text-success")">
+                                        <span>@tracker.Label</span>
+                                        @if (tracker.IsPrimary)
+                                        {
+                                            <span class="badge text-bg-primary">Primary</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-secondary">Fallback</span>
+                                        }
+                                        @if (tracker.IsStale)
+                                        {
+                                            <span class="badge text-bg-danger">STALE</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-success">LIVE</span>
+                                        }
+                                    </div>
+                                    <div class="small mt-1">
+                                        Entity: <strong>@tracker.EntityId</strong><br />
+                                        State: <strong>@tracker.State</strong><br />
+                                        Last updated: <strong>@tracker.LastUpdatedLocal</strong><br />
+                                        UTC: <strong>@tracker.LastUpdatedUtc</strong><br />
+                                        Age: <strong>@tracker.Age</strong><br />
+                                        Lat/Lon: <strong>@(tracker.Latitude?.ToString("F6") ?? "-")</strong>, <strong>@(tracker.Longitude?.ToString("F6") ?? "-")</strong><br />
+                                        Accuracy: <strong>@(tracker.Accuracy?.ToString() ?? "-")</strong> m
+                                        @if (!string.IsNullOrWhiteSpace(tracker.Message))
+                                        {
+                                            <br /><span class="text-muted">@tracker.Message</span>
+                                        }
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <div class="small text-uppercase text-muted fw-semibold mb-1">Pax transport health</div>
+                    <div class="row g-2">
+                        @foreach (var transport in Model.TransportCards)
+                        {
+                            <div class="col-12 col-md-6">
+                                <div class="p-2 rounded @(transport.IsStale ? "border border-danger bg-danger-subtle" : "border border-info bg-info-subtle")">
+                                    <div class="d-flex align-items-center gap-2 small text-uppercase fw-semibold @(transport.IsStale ? "text-danger" : "text-info-emphasis")">
+                                        <span>@transport.DisplayName</span>
+                                        <span class="badge @(transport.IsStale ? "text-bg-danger" : "text-bg-info")">@transport.PathLabel</span>
+                                    </div>
+                                    <div class="small mt-1">
+                                        Device: <strong>@transport.DeviceId</strong><br />
+                                        Last sample age: <strong>@transport.LastSeenAge</strong><br />
+                                        BLE/WiFi: <strong>@transport.Ble</strong> / <strong>@transport.Wifi</strong><br />
+                                        SSID: <strong>@transport.WifiSsid</strong><br />
+                                        Ack age: <strong>@transport.AckAge</strong> | Failures: <strong>@transport.ConsecutiveFailures</strong><br />
+                                        Ack: <strong>@transport.AckId</strong><br />
+                                        Source: <span class="text-muted">@transport.SourceChannel</span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-xl-4">
+        <div class="card border-0 bg-light-subtle shadow-sm h-100">
+            <div class="card-body py-2 px-3">
+                <div class="small text-uppercase text-muted fw-semibold">Latest GPS Sample</div>
+                <div class="small text-muted mt-1">
+                    Last GPS received at: <span id="lastGpsAtLocal">-</span><br />
+                    UTC: <span id="lastGpsAtUtc">-</span><br />
+                    Phone: <span id="lastGpsPhone">@Model.SelectedGpsPhone</span> | Topic: <span id="lastGpsSource">-</span><br />
+                    Map source: <span id="mapGpsSource">-</span> | Map point: <span id="mapGpsCoords">-</span><br />
+                    Age: <span id="lastGpsAge">-</span> | Clock drift: <span id="clockDrift">-</span>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -24,12 +148,28 @@
         <select id="minutesSelect" class="form-select form-select-sm">
             <option value="30">Last 30m</option>
             <option value="60">Last 1h</option>
-            <option value="120" selected>Last 2h</option>
+            <option value="120">Last 2h</option>
+            <option value="180">Last 3h</option>
+            <option value="240">Last 4h</option>
             <option value="360">Last 6h</option>
+            <option value="480">Last 8h</option>
             <option value="720">Last 12h</option>
             <option value="1440">Last 24h</option>
+            <option value="2880">Last 48h</option>
+            <option value="4320">Last 72h</option>
+            <option value="5760">Last 96h</option>
+            <option value="7200">Last 5d</option>
+            <option value="8640">Last 6d</option>
+            <option value="10080">Last 7d</option>
             <option value="43200">Last 30d</option>
         </select>
+    </div>
+    <div class="col-6 col-lg-3">
+        <label class="form-label mb-1">Custom window</label>
+        <div class="form-check mt-1">
+            <input class="form-check-input" type="checkbox" id="customRangeEnabled" @(Model.InitialUseCustomRange ? "checked" : "")>
+            <label class="form-check-label" for="customRangeEnabled">Use start/end time</label>
+        </div>
     </div>
     <div class="col-6 col-lg-3">
         <label for="refreshSelect" class="form-label mb-1">Refresh</label>
@@ -44,21 +184,69 @@
         <label class="form-label mb-1">Devices</label>
         <div class="form-check">
             <input class="form-check-input" type="checkbox" id="deviceAll" @(Model.SelectedDeviceIds.Count == 0 ? "checked" : "")>
-            <label class="form-check-label" for="deviceAll">All devices</label>
+            <label class="form-check-label" for="deviceAll">@Model.AllDevicesLabel</label>
         </div>
         @foreach (var d in Model.Devices)
         {
-            var isChecked = Model.SelectedDeviceIds.Contains(d, StringComparer.OrdinalIgnoreCase);
+            var isChecked = Model.SelectedDeviceIds.Contains(d.DeviceId, StringComparer.OrdinalIgnoreCase);
+            var checkboxId = $"device_{d.DeviceId.Replace(" ", "_").Replace(".", "_")}";
             <div class="form-check">
-                <input class="form-check-input device-pick" type="checkbox" id="device_@d" value="@d" @(isChecked ? "checked" : "")>
-                <label class="form-check-label" for="device_@d">@d</label>
+                <input class="form-check-input device-pick" type="checkbox" id="@checkboxId" value="@d.DeviceId" @(isChecked ? "checked" : "")>
+                <label class="form-check-label" for="@checkboxId">@d.DisplayName</label>
             </div>
+        }
+        @if (Model.Devices.Count == 0)
+        {
+            <div class="small text-warning mt-2">@Model.EmptyStateMessage</div>
         }
     </div>
     <div class="col-12 col-lg-3">
         <label for="weightScale" class="form-label mb-1">Line weight</label>
         <input type="range" id="weightScale" class="form-range" min="1" max="10" step="1" value="3">
         <div class="text-muted small">Scale: <span id="weightScaleValue">3</span></div>
+    </div>
+</div>
+<div class="row g-2 mb-2">
+    <div class="col-12 col-lg-3">
+        <label for="rangeFromInput" class="form-label mb-1">Start</label>
+        <input id="rangeFromInput" type="datetime-local" class="form-control form-control-sm" value="@Model.InitialFromLocal">
+    </div>
+    <div class="col-6 col-lg-2">
+        <label for="rangePresetHours" class="form-label mb-1">Quick span</label>
+        <select id="rangePresetHours" class="form-select form-select-sm">
+            <option value="1">+1h</option>
+            <option value="2">+2h</option>
+            <option value="4">+4h</option>
+            <option value="6">+6h</option>
+            <option value="12">+12h</option>
+            <option value="24">+24h</option>
+            <option value="48">+48h</option>
+            <option value="72">+72h</option>
+        </select>
+    </div>
+    <div class="col-6 col-lg-2">
+        <label class="form-label mb-1">Range mode</label>
+        <div class="form-check mt-1">
+            <input class="form-check-input" type="checkbox" id="rangeAutoApply" @(!Model.InitialUseCustomRange ? "checked" : "")>
+            <label class="form-check-label" for="rangeAutoApply">Auto end</label>
+        </div>
+    </div>
+    <div class="col-12 col-lg-3">
+        <label for="rangeToInput" class="form-label mb-1">End</label>
+        <input id="rangeToInput" type="datetime-local" class="form-control form-control-sm" value="@Model.InitialToLocal">
+    </div>
+    <div class="col-12 col-lg-2 d-flex align-items-end">
+        <div class="d-grid gap-2 w-100">
+            <button id="applyRangeBtn" type="button" class="btn btn-sm btn-outline-primary">Apply Window</button>
+            <button id="resetToNowBtn" type="button" class="btn btn-sm btn-outline-secondary">Reset to now</button>
+        </div>
+    </div>
+</div>
+<div class="row g-2 mb-2">
+    <div class="col-12">
+        <div class="small text-muted">
+            Active window: <span id="activeWindowLabel">-</span>
+        </div>
     </div>
 </div>
 <div class="row g-2 mb-2">
@@ -84,7 +272,9 @@
 
 <div class="d-flex justify-content-end gap-2 mt-2 mb-2">
     <div id="gpsActionStatus" class="align-self-center small text-muted me-2"></div>
+    <button id="setHomeIntervalBtn" type="button" class="btn btn-sm btn-outline-success">Set All @Model.ManualHomeIntervalSeconds s</button>
     <button id="forceGpsBtn" type="button" class="btn btn-sm btn-outline-warning" @(Model.ForceGpsConfigured ? "" : "disabled")>Force Phone GPS</button>
+    <button id="fullGpsDetailBtn" type="button" class="btn btn-sm btn-outline-secondary" title="Keeps up to 10,000 GPS points for the selected window">GPS detail: Normal</button>
     <button id="refreshGpsBtn" type="button" class="btn btn-sm btn-outline-primary">Refresh GPS</button>
     <button id="centerAllBtn" type="button" class="btn btn-sm btn-outline-secondary">Center All</button>
     <button id="centerLatestBtn" type="button" class="btn btn-sm btn-outline-secondary">Center Latest</button>
@@ -96,10 +286,48 @@
 <div id="map" style="height: 70vh; border: 1px solid #ddd;"></div>
 <div class="mt-2">
     <div class="small text-muted mb-1">BLE color legend</div>
-    <div style="height: 12px; border-radius: 6px; background: linear-gradient(90deg, #ffffff 0%, #ffffff 8%, hsl(120,85%,78%) 20%, hsl(0,85%,35%) 100%); border: 1px solid #ccc;"></div>
+    <div style="height: 12px; border-radius: 6px; background: linear-gradient(90deg, #d1d5db 0%, #22c55e 15%, #84cc16 30%, #facc15 50%, #fb923c 70%, #ef4444 88%, #7f1d1d 100%); border: 1px solid #ccc;"></div>
     <div class="d-flex justify-content-between small text-muted">
         <span>Low (<span id="bleLegendMin">0</span>)</span>
         <span>High (<span id="bleLegendMax">0</span>)</span>
+    </div>
+    <div class="row g-2 mt-2">
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded px-2 py-1 small d-flex align-items-center gap-2">
+                <span style="display:inline-block; width:14px; height:14px; border-radius:50%; background:#d1d5db; border:2px solid #6b7280;"></span>
+                <span><strong>0</strong> BLE</span>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded px-2 py-1 small d-flex align-items-center gap-2">
+                <span style="display:inline-block; width:16px; height:16px; border-radius:50%; background:#22c55e; border:2px solid #166534;"></span>
+                <span><strong>1-5</strong> BLE</span>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded px-2 py-1 small d-flex align-items-center gap-2">
+                <span style="display:inline-block; width:18px; height:18px; border-radius:50%; background:#84cc16; border:2px solid #4d7c0f;"></span>
+                <span><strong>6-10</strong> BLE</span>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded px-2 py-1 small d-flex align-items-center gap-2">
+                <span style="display:inline-block; width:20px; height:20px; border-radius:50%; background:#facc15; border:2px solid #a16207;"></span>
+                <span><strong>11-20</strong> BLE</span>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded px-2 py-1 small d-flex align-items-center gap-2">
+                <span style="display:inline-block; width:22px; height:22px; border-radius:50%; background:#ef4444; border:2px solid #b91c1c;"></span>
+                <span><strong>21-40</strong> BLE</span>
+            </div>
+        </div>
+        <div class="col-6 col-md-4 col-xl-2">
+            <div class="border rounded px-2 py-1 small d-flex align-items-center gap-2">
+                <span style="display:inline-block; width:24px; height:24px; border-radius:50%; background:#7f1d1d; border:2px solid #450a0a;"></span>
+                <span><strong>40+</strong> BLE</span>
+            </div>
+        </div>
     </div>
 </div>
 <div class="row g-2 mt-2 align-items-end">
@@ -120,6 +348,12 @@
 
 <script>
     const gpsDisplayMode = "@Model.GpsDisplayMode";
+    const initialMinutes = @Model.InitialMinutes;
+    const initialRangeHours = @Model.InitialRangeHours;
+    const initialUseCustomRange = @(Model.InitialUseCustomRange ? "true" : "false");
+    const defaultDeviceIds = @Html.Raw(System.Text.Json.JsonSerializer.Serialize(Model.DefaultDeviceIds));
+    const restrictToDefaultDevices = @(Model.RestrictToDefaultDevices ? "true" : "false");
+    const directOnlyMode = false;
     const map = L.map('map', {
         zoomSnap: 0.25,
         zoomDelta: 0.25,
@@ -147,11 +381,21 @@
 
     const minutesSelect = document.getElementById("minutesSelect");
     const refreshSelect = document.getElementById("refreshSelect");
+    const customRangeEnabled = document.getElementById("customRangeEnabled");
+    const rangeFromInput = document.getElementById("rangeFromInput");
+    const rangeToInput = document.getElementById("rangeToInput");
+    const rangePresetHours = document.getElementById("rangePresetHours");
+    const rangeAutoApply = document.getElementById("rangeAutoApply");
+    const applyRangeBtn = document.getElementById("applyRangeBtn");
+    const resetToNowBtn = document.getElementById("resetToNowBtn");
+    const activeWindowLabel = document.getElementById("activeWindowLabel");
     const weightScale = document.getElementById("weightScale");
     const weightScaleValue = document.getElementById("weightScaleValue");
     const mapStyleSelect = document.getElementById("mapStyleSelect");
     const mapBrightness = document.getElementById("mapBrightness");
     const forceGpsBtn = document.getElementById("forceGpsBtn");
+    const setHomeIntervalBtn = document.getElementById("setHomeIntervalBtn");
+    const fullGpsDetailBtn = document.getElementById("fullGpsDetailBtn");
     const gpsActionStatus = document.getElementById("gpsActionStatus");
     const refreshGpsBtn = document.getElementById("refreshGpsBtn");
     const centerAllBtn = document.getElementById("centerAllBtn");
@@ -168,6 +412,9 @@
     const lastGpsAtUtc = document.getElementById("lastGpsAtUtc");
     const lastGpsAge = document.getElementById("lastGpsAge");
     const clockDrift = document.getElementById("clockDrift");
+    const lastGpsSource = document.getElementById("lastGpsSource");
+    const mapGpsSource = document.getElementById("mapGpsSource");
+    const mapGpsCoords = document.getElementById("mapGpsCoords");
     let markers = [];
     let segments = [];
     let timerId = null;
@@ -177,17 +424,172 @@
     let timelineMaxMs = 0;
     let hasAutoFitted = false;
     let latestPoint = null;
+    let suppressAutoFocusUntilMs = 0;
+    let isProgrammaticMapMove = false;
+    let fullGpsDetail = new URLSearchParams(window.location.search).get("fullGpsDetail") === "true";
+    const manualMapFocusCooldownMs = 3 * 60 * 1000;
     const deviceAccentPalette = ['#2563eb', '#dc2626', '#16a34a', '#d97706', '#7c3aed', '#0891b2', '#be123c', '#4f46e5'];
     const deviceDashPatterns = [null, '14 8', '4 8', '18 6 4 6', '2 7', '10 4 2 4'];
+    const namedDeviceStyles = {
+        'paxcounter-tbeam': { color: '#ea580c', dash: '18 8', label: 'T-Beam' },
+        'paxcounter-t3': { color: '#1d4ed8', dash: null, label: 'T3' },
+        'paxcounter-t3s3b': { color: '#1d4ed8', dash: null, label: 'T3 / S3B' }
+    };
+
+    function formatLocalInput(date) {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, "0");
+        const day = String(date.getDate()).padStart(2, "0");
+        const hour = String(date.getHours()).padStart(2, "0");
+        const minute = String(date.getMinutes()).padStart(2, "0");
+        return `${year}-${month}-${day}T${hour}:${minute}`;
+    }
+
+    function addHoursToLocalInput(value, hours) {
+        if (!value) return "";
+        const dt = new Date(value);
+        if (Number.isNaN(dt.getTime())) return "";
+        dt.setHours(dt.getHours() + Number(hours || 0));
+        return formatLocalInput(dt);
+    }
+
+    function updateRangeEndFromPreset(force = false) {
+        if (!force && !rangeAutoApply?.checked) {
+            return;
+        }
+
+        const nextValue = addHoursToLocalInput(rangeFromInput?.value, rangePresetHours?.value || 6);
+        if (nextValue && rangeToInput) {
+            rangeToInput.value = nextValue;
+        }
+    }
+
+    function suppressAutoFocusForManualMapMove() {
+        if (isProgrammaticMapMove) {
+            return;
+        }
+
+        suppressAutoFocusUntilMs = Date.now() + manualMapFocusCooldownMs;
+    }
+
+    function canAutoFocusMap() {
+        return Date.now() >= suppressAutoFocusUntilMs;
+    }
+
+    function runProgrammaticMapMove(action) {
+        isProgrammaticMapMove = true;
+        try {
+            action();
+        } finally {
+            window.setTimeout(() => {
+                isProgrammaticMapMove = false;
+            }, 0);
+        }
+    }
+
+    function getActiveTimeParams() {
+        const params = new URLSearchParams({ directOnly: String(directOnlyMode) });
+        if (fullGpsDetail) {
+            params.set("fullGpsDetail", "true");
+        }
+        const useCustomRange = !!customRangeEnabled?.checked;
+        const fromValue = rangeFromInput?.value || "";
+        const toValue = rangeToInput?.value || "";
+
+        if (useCustomRange && fromValue) {
+            let normalizedTo = toValue;
+            const fromDate = new Date(fromValue);
+            let toDate = normalizedTo ? new Date(normalizedTo) : null;
+            if (Number.isNaN(fromDate.getTime())) {
+                params.set("minutes", String(Number(minutesSelect.value || 120)));
+                return params;
+            }
+
+            if (!toDate || Number.isNaN(toDate.getTime()) || toDate <= fromDate) {
+                updateRangeEndFromPreset(true);
+                normalizedTo = rangeToInput?.value || "";
+                toDate = normalizedTo ? new Date(normalizedTo) : null;
+            }
+
+            if (toDate && !Number.isNaN(toDate.getTime()) && toDate > fromDate) {
+                params.set("fromUtc", fromDate.toISOString());
+                params.set("toUtc", toDate.toISOString());
+                return params;
+            }
+        }
+
+        params.set("minutes", String(Number(minutesSelect.value || 120)));
+        return params;
+    }
+
+    function updateFullGpsDetailButton() {
+        if (!fullGpsDetailBtn) return;
+        fullGpsDetailBtn.textContent = fullGpsDetail ? "GPS detail: High" : "GPS detail: Normal";
+        fullGpsDetailBtn.classList.toggle("btn-outline-secondary", !fullGpsDetail);
+        fullGpsDetailBtn.classList.toggle("btn-warning", fullGpsDetail);
+        fullGpsDetailBtn.title = fullGpsDetail
+            ? "High-detail history is on (up to 10,000 points). Click to return to normal detail."
+            : "Keeps up to 10,000 GPS points for the selected window.";
+    }
+
+    function syncUrlState() {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("minutes");
+        url.searchParams.delete("fromUtc");
+        url.searchParams.delete("toUtc");
+        url.searchParams.delete("deviceIds");
+
+        const params = getActiveTimeParams();
+        for (const [key, value] of params.entries()) {
+            if (key === "directOnly") {
+                continue;
+            }
+            url.searchParams.append(key, value);
+        }
+
+        for (const deviceId of getSelectedDevices()) {
+            url.searchParams.append("deviceIds", deviceId);
+        }
+
+        window.history.replaceState({}, "", url);
+    }
+
+    function updateActiveWindowLabel(params) {
+        if (!activeWindowLabel) return;
+        const fromUtc = params.get("fromUtc");
+        const toUtc = params.get("toUtc");
+        if (fromUtc && toUtc) {
+            activeWindowLabel.textContent = `${new Date(fromUtc).toLocaleString()} -> ${new Date(toUtc).toLocaleString()}`;
+            return;
+        }
+
+        const minutes = Number(params.get("minutes") || minutesSelect.value || 120);
+        activeWindowLabel.textContent = `Last ${minutes} minute(s)`;
+    }
+
+    function resetWindowToNow() {
+        const now = new Date();
+        rangeToInput.value = formatLocalInput(now);
+        rangeFromInput.value = addHoursToLocalInput(rangeToInput.value, -(Number(rangePresetHours?.value || 6)));
+        customRangeEnabled.checked = false;
+        if (rangeAutoApply) {
+            rangeAutoApply.checked = true;
+        }
+        hasAutoFitted = false;
+        loadTrack(true);
+    }
 
     function centerLatestPoint() {
         if (!latestPoint) {
             return;
         }
 
-        map.flyTo([latestPoint.lat, latestPoint.lon], Math.max(map.getZoom(), 19), {
-            animate: true,
-            duration: 0.6
+        suppressAutoFocusUntilMs = 0;
+        runProgrammaticMapMove(() => {
+            map.flyTo([latestPoint.lat, latestPoint.lon], Math.max(map.getZoom(), 19), {
+                animate: true,
+                duration: 0.6
+            });
         });
     }
     function centerAllPoints() {
@@ -203,14 +605,35 @@
             return;
         }
 
-        map.fitBounds(bounds, { padding: [24, 24], maxZoom: 22 });
+        suppressAutoFocusUntilMs = 0;
+        runProgrammaticMapMove(() => {
+            map.fitBounds(bounds, { padding: [24, 24], maxZoom: 22 });
+        });
     }
 
-    function getDeviceAccent(deviceIndex) {
+    function normalizeDeviceStyleKey(deviceId) {
+        return String(deviceId || '').trim().toLowerCase();
+    }
+
+    function getNamedDeviceStyle(deviceId) {
+        return namedDeviceStyles[normalizeDeviceStyleKey(deviceId)] || null;
+    }
+
+    function getDeviceAccent(deviceId, deviceIndex) {
+        const namedStyle = getNamedDeviceStyle(deviceId);
+        if (namedStyle?.color) {
+            return namedStyle.color;
+        }
+
         return deviceAccentPalette[deviceIndex % deviceAccentPalette.length];
     }
 
-    function getDeviceDash(deviceIndex) {
+    function getDeviceDash(deviceId, deviceIndex) {
+        const namedStyle = getNamedDeviceStyle(deviceId);
+        if (Object.prototype.hasOwnProperty.call(namedStyle || {}, 'dash')) {
+            return namedStyle.dash;
+        }
+
         return deviceDashPatterns[deviceIndex % deviceDashPatterns.length];
     }
 
@@ -229,25 +652,74 @@
         return [lat + latOffset, lon + lonOffset];
     }
 
-    function bleColor(bleValue, maxBleInView) {
+    function bleBand(bleValue) {
         const safeBle = Math.max(0, Number(bleValue || 0));
-        if (safeBle === 0) {
-            return "#ffffff";
-        }
+        if (safeBle === 0) return 0;
+        if (safeBle <= 5) return 1;
+        if (safeBle <= 10) return 2;
+        if (safeBle <= 20) return 3;
+        if (safeBle <= 40) return 4;
+        return 5;
+    }
 
-        const maxBle = Math.max(1, Number(maxBleInView || 0));
-        // Keep BLE=1 at the light-green start of the scale.
-        const normalized = maxBle <= 1 ? 0 : (safeBle - 1) / (maxBle - 1);
-        const clamped = Math.max(0, Math.min(1, normalized));
-        // 120deg (light green) -> 0deg (dark red)
-        const hue = 120 - (120 * clamped);
-        const light = 78 - (43 * clamped);
-        return `hsl(${hue}, 85%, ${light}%)`;
+    function bleColor(bleValue, maxBleInView) {
+        switch (bleBand(bleValue)) {
+            case 0: return "#d1d5db";
+            case 1: return "#22c55e";
+            case 2: return "#84cc16";
+            case 3: return "#facc15";
+            case 4: return "#ef4444";
+            default: return "#7f1d1d";
+        }
+    }
+
+    function bleStrokeColor(bleValue, maxBleInView) {
+        switch (bleBand(bleValue)) {
+            case 0: return "#6b7280";
+            case 1: return "#166534";
+            case 2: return "#4d7c0f";
+            case 3: return "#a16207";
+            case 4: return "#b91c1c";
+            default: return "#450a0a";
+        }
+    }
+
+    function bleMarkerRadius(bleValue, maxBleInView) {
+        switch (bleBand(bleValue)) {
+            case 0: return 6;
+            case 1: return 8;
+            case 2: return 10;
+            case 3: return 12;
+            case 4: return 14;
+            default: return 16;
+        }
+    }
+
+    function bleLineWeight(bleValue, maxBleInView, scale) {
+        const scaleFactor = Math.max(1, Number(scale || 3));
+        switch (bleBand(bleValue)) {
+            case 0: return Math.max(2, Math.round(scaleFactor * 0.7));
+            case 1: return Math.max(3, Math.round(scaleFactor * 1.1));
+            case 2: return Math.max(4, Math.round(scaleFactor * 1.5));
+            case 3: return Math.max(5, Math.round(scaleFactor * 1.9));
+            case 4: return Math.max(6, Math.round(scaleFactor * 2.3));
+            default: return Math.max(7, Math.round(scaleFactor * 2.7));
+        }
     }
 
     function clearMarkers() {
         markers.forEach(m => map.removeLayer(m));
         markers = [];
+    }
+
+    function isGpsJoinedPoint(point) {
+        const source = String(point?.sourceTopic || "");
+        return source.includes("GPS join");
+    }
+
+    function isWifiGpsJoinedPoint(point) {
+        const source = String(point?.sourceTopic || "");
+        return source.includes("WiFi/HTTP") && source.includes("GPS join");
     }
 
     function buildPointPopup(p) {
@@ -258,15 +730,24 @@
         const ble = Number(p.ble || 0);
         const wifi = Number(p.wifi || 0);
         const pax = Number(p.pax || 0);
+        const source = p.sourceTopic || "-";
+        const badges = [];
+        if (isWifiGpsJoinedPoint(p)) {
+            badges.push('<span class="tracking-source-pill tracking-source-pill--wifi">WiFi + GPS join</span>');
+        } else if (isGpsJoinedPoint(p)) {
+            badges.push('<span class="tracking-source-pill">GPS joined</span>');
+        }
 
         return [
             `<strong>${p.deviceId}</strong>`,
+            badges.join(' '),
             `Time: ${tsLocal}`,
             `BLE: ${ble} | WiFi: ${wifi} | PAX: ${pax}`,
+            `Source: ${source}`,
             `Lat: ${lat}`,
             `Lon: ${lon}`,
             `Accuracy: ${acc} m`
-        ].join("<br/>");
+        ].filter(Boolean).join("<br/>");
     }
 
     function toDms(value, isLat) {
@@ -295,7 +776,7 @@
 
     function getSelectedDevices() {
         if (document.getElementById("deviceAll")?.checked) {
-            return [];
+            return restrictToDefaultDevices ? defaultDeviceIds : [];
         }
 
         return Array.from(document.querySelectorAll(".device-pick:checked"))
@@ -323,6 +804,9 @@
             lastGpsAtUtc.textContent = "-";
             lastGpsAge.textContent = "-";
             clockDrift.textContent = "-";
+            lastGpsSource.textContent = "-";
+            if (mapGpsSource) mapGpsSource.textContent = "-";
+            if (mapGpsCoords) mapGpsCoords.textContent = "-";
             return;
         }
 
@@ -339,6 +823,9 @@
         lastGpsAtUtc.textContent = ts.toISOString().replace("T", " ").replace("Z", "");
         lastGpsAge.textContent = `${ageSec}s`;
         clockDrift.textContent = driftLabel;
+        lastGpsSource.textContent = newest.sourceTopic || "-";
+        if (mapGpsSource) mapGpsSource.textContent = newest.sourceTopic || "-";
+        if (mapGpsCoords) mapGpsCoords.textContent = `${Number(newest.lat).toFixed(6)}, ${Number(newest.lon).toFixed(6)}`;
     }
 
     function setMapStyle(styleKey) {
@@ -361,6 +848,45 @@
         }
     }
 
+    function distanceMeters(a, b) {
+        if (!a || !b) return 0;
+        return map.distance([Number(a.lat), Number(a.lon)], [Number(b.lat), Number(b.lon)]);
+    }
+
+    function shouldBreakSegment(a, b) {
+        if (!a || !b) return true;
+        const aTime = new Date(a.timestampUtc).getTime();
+        const bTime = new Date(b.timestampUtc).getTime();
+        if (!Number.isFinite(aTime) || !Number.isFinite(bTime) || bTime <= aTime) {
+            return true;
+        }
+
+        const dtSeconds = (bTime - aTime) / 1000;
+        const distMeters = distanceMeters(a, b);
+        const speedMps = distMeters / Math.max(dtSeconds, 1);
+        const sourceA = String(a.sourceTopic || '');
+        const sourceB = String(b.sourceTopic || '');
+        const sourceChanged = sourceA !== sourceB;
+
+        if (dtSeconds > 20 * 60) {
+            return true;
+        }
+
+        if (distMeters > 3000 && dtSeconds < 15 * 60) {
+            return true;
+        }
+
+        if (speedMps > 75) {
+            return true;
+        }
+
+        if (sourceChanged && distMeters > 1500 && dtSeconds < 10 * 60) {
+            return true;
+        }
+
+        return false;
+    }
+
     function renderTrack(points, shouldFitBounds) {
         clearMarkers();
         clearSegments();
@@ -378,9 +904,6 @@
         const maxBleInView = points.length ? Math.max(...points.map(p => Number(p.ble || 0))) : 0;
         bleLegendMin.textContent = "0";
         bleLegendMax.textContent = String(maxBleInView);
-        const minWidth = Math.max(2, Math.round(scale * 0.6));
-        const maxWidth = Math.max(minWidth + 1, minWidth + scale * 2);
-        const widthRange = Math.max(1, maxBleInView);
         const trackAlpha = Math.max(0.2, Math.min(1.0, Number(trackOpacity.value || 90) / 100));
         trackOpacityValue.textContent = String(Math.round(trackAlpha * 100));
         const bounds = [];
@@ -391,49 +914,130 @@
             const device = devices[dIdx];
             const devicePoints = pointsByDevice[device]
                 .sort((a, b) => new Date(a.timestampUtc) - new Date(b.timestampUtc));
-            const accentColor = getDeviceAccent(dIdx);
-            const dashArray = getDeviceDash(dIdx);
+            const accentColor = getDeviceAccent(device, dIdx);
+            const dashArray = getDeviceDash(device, dIdx);
 
             for (const p of devicePoints) {
                 const displayCoords = getDisplayCoordinates(p, dIdx, devices.length, useDeviceOffset);
                 bounds.push(displayCoords);
                 const pointColor = bleColor(p.ble, maxBleInView);
-                const marker = L.circleMarker(displayCoords, { radius: 11, weight: 3, color: accentColor, fillColor: pointColor, fillOpacity: trackAlpha, opacity: 0.95 })
+                const joinedGps = isGpsJoinedPoint(p);
+                const wifiJoinedGps = isWifiGpsJoinedPoint(p);
+
+                if (joinedGps) {
+                    const halo = L.circleMarker(displayCoords, {
+                        radius: bleMarkerRadius(p.ble, maxBleInView) + (wifiJoinedGps ? 8 : 6),
+                        weight: wifiJoinedGps ? 3 : 2,
+                        color: wifiJoinedGps ? "#0284c7" : "#7c3aed",
+                        fillColor: wifiJoinedGps ? "#38bdf8" : "#c084fc",
+                        fillOpacity: wifiJoinedGps ? 0.16 : 0.10,
+                        opacity: 0.95,
+                        dashArray: wifiJoinedGps ? '7 5' : '4 4'
+                    });
+                    halo.addTo(map);
+                    markers.push(halo);
+                }
+
+                const marker = L.circleMarker(displayCoords, {
+                    radius: bleMarkerRadius(p.ble, maxBleInView) + (wifiJoinedGps ? 2 : 0),
+                    weight: Math.max(2, Math.round(scale * 0.8)) + (joinedGps ? 1 : 0),
+                    color: wifiJoinedGps ? "#0369a1" : (joinedGps ? "#6d28d9" : bleStrokeColor(p.ble, maxBleInView)),
+                    fillColor: pointColor,
+                    fillOpacity: Math.max(0.55, trackAlpha),
+                    opacity: 0.98
+                })
                     .bindPopup(buildPointPopup(p));
                 marker.addTo(map);
                 markers.push(marker);
             }
 
-            // Always draw a visible base path for selected period.
+            // Draw only continuous path chunks so suspicious jumps do not create fake zig-zags.
             if (devicePoints.length >= 2) {
-                const baseLatLngs = devicePoints.map(p => getDisplayCoordinates(p, dIdx, devices.length, useDeviceOffset));
-                const basePath = L.polyline(baseLatLngs, { color: accentColor, weight: minWidth + 1, opacity: 0.28 * trackAlpha, dashArray: dashArray ?? '1 0' });
-                basePath.addTo(map);
-                segments.push(basePath);
+                const baseChunks = [];
+                let currentChunk = [getDisplayCoordinates(devicePoints[0], dIdx, devices.length, useDeviceOffset)];
+
+                for (let i = 1; i < devicePoints.length; i++) {
+                    const previousPoint = devicePoints[i - 1];
+                    const currentPoint = devicePoints[i];
+                    const currentCoords = getDisplayCoordinates(currentPoint, dIdx, devices.length, useDeviceOffset);
+
+                    if (shouldBreakSegment(previousPoint, currentPoint)) {
+                        if (currentChunk.length >= 2) {
+                            baseChunks.push(currentChunk);
+                        }
+                        currentChunk = [currentCoords];
+                        continue;
+                    }
+
+                    currentChunk.push(currentCoords);
+                }
+
+                if (currentChunk.length >= 2) {
+                    baseChunks.push(currentChunk);
+                }
+
+                for (const chunk of baseChunks) {
+                    const basePath = L.polyline(chunk, {
+                        color: accentColor,
+                        weight: Math.max(2, Math.round(scale)),
+                        opacity: 0.2 * trackAlpha,
+                        dashArray: dashArray ?? '1 0'
+                    });
+                    basePath.addTo(map);
+                    segments.push(basePath);
+                }
             }
 
             for (let i = 1; i < devicePoints.length; i++) {
                 const a = devicePoints[i - 1];
                 const b = devicePoints[i];
+                if (shouldBreakSegment(a, b)) {
+                    continue;
+                }
+
                 // Segment keeps BLE color/weight from the source point until next point arrives.
                 const bleStart = Number(a.ble || 0);
-                const zeroBleWidth = Math.max(1, Math.round(minWidth * 0.55));
-                const bleNorm = Math.max(0, Math.min(1, bleStart / widthRange));
-                const weight = bleStart <= 0
-                    ? zeroBleWidth
-                    : (minWidth + (bleNorm * (maxWidth - minWidth)));
+                const weight = bleLineWeight(bleStart, maxBleInView, scale);
                 const segColor = bleColor(bleStart, maxBleInView);
                 const fromCoords = getDisplayCoordinates(a, dIdx, devices.length, useDeviceOffset);
                 const toCoords = getDisplayCoordinates(b, dIdx, devices.length, useDeviceOffset);
-                const seg = L.polyline([fromCoords, toCoords], { color: segColor, weight: weight, opacity: 0.9 * trackAlpha, dashArray: dashArray ?? null });
+                const seg = L.polyline([fromCoords, toCoords], {
+                    color: segColor,
+                    weight: weight,
+                    opacity: bleStart <= 0 ? 0.45 * trackAlpha : 0.98 * trackAlpha,
+                    dashArray: dashArray ?? null
+                });
                 seg.addTo(map);
                 segments.push(seg);
             }
         }
 
         if (bounds.length > 0) {
-            if (shouldFitBounds) {
-                map.fitBounds(bounds, { padding: [20, 20] });
+            const latestLatLng = latestPoint
+                ? L.latLng(Number(latestPoint.lat), Number(latestPoint.lon))
+                : null;
+            const currentBounds = map.getBounds();
+            const latestOutsideView = latestLatLng
+                ? !currentBounds.pad(-0.1).contains(latestLatLng)
+                : false;
+            const currentCenter = map.getCenter();
+            const latestDistanceMeters = latestLatLng
+                ? map.distance(currentCenter, latestLatLng)
+                : 0;
+            const useLatestFocus = latestOutsideView && latestDistanceMeters > 500;
+            const autoFocusAllowed = canAutoFocusMap();
+
+            if (autoFocusAllowed && useLatestFocus && latestLatLng) {
+                runProgrammaticMapMove(() => {
+                    map.flyTo(latestLatLng, Math.max(map.getZoom(), 16), {
+                        animate: true,
+                        duration: 0.8
+                    });
+                });
+            } else if (autoFocusAllowed && (shouldFitBounds || latestOutsideView)) {
+                runProgrammaticMapMove(() => {
+                    map.fitBounds(bounds, { padding: [20, 20], maxZoom: 22 });
+                });
             }
         }
     }
@@ -479,6 +1083,30 @@
         }
     }
 
+    async function setHomeInterval() {
+        if (!setHomeIntervalBtn) return;
+        setHomeIntervalBtn.disabled = true;
+        const originalText = setHomeIntervalBtn.textContent;
+        setHomeIntervalBtn.textContent = "Queuing...";
+        setGpsActionStatus("Queuing @Model.ManualHomeIntervalSeconds s interval for devices...");
+
+        try {
+            const response = await fetch('/tracking/api/set-home-interval', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ deviceIds: getSelectedDevices() })
+            });
+
+            const payload = await response.json();
+            setGpsActionStatus(payload.message || (payload.success ? 'Home interval queued.' : 'Home interval failed.'), !payload.success);
+        } catch {
+            setGpsActionStatus('Home interval request failed.', true);
+        } finally {
+            setHomeIntervalBtn.disabled = false;
+            setHomeIntervalBtn.textContent = originalText;
+        }
+    }
+
     async function loadTrack(triggeredManually = false) {
         stopPlayback();
 
@@ -487,11 +1115,12 @@
             refreshGpsBtn.textContent = triggeredManually ? "Refreshing..." : "Refresh GPS";
         }
 
-        const minutes = Number(minutesSelect.value || 120);
-        const params = new URLSearchParams({ minutes: String(minutes) });
+        const params = getActiveTimeParams();
+        updateActiveWindowLabel(params);
         for (const deviceId of getSelectedDevices()) {
             params.append("deviceIds", deviceId);
         }
+        syncUrlState();
         try {
             const response = await fetch(`/tracking/api/track?${params.toString()}`, { cache: "no-store" });
             if (!response.ok) return;
@@ -535,6 +1164,13 @@
     mapStyleSelect.addEventListener("change", () => setMapStyle(mapStyleSelect.value));
     mapBrightness.addEventListener("input", applyMapBrightness);
     forceGpsBtn?.addEventListener("click", forcePhoneGps);
+    setHomeIntervalBtn?.addEventListener("click", setHomeInterval);
+    fullGpsDetailBtn?.addEventListener("click", () => {
+        fullGpsDetail = !fullGpsDetail;
+        updateFullGpsDetailButton();
+        hasAutoFitted = false;
+        loadTrack(true);
+    });
     refreshGpsBtn?.addEventListener("click", () => loadTrack(true));
     centerAllBtn?.addEventListener("click", centerAllPoints);
     centerLatestBtn?.addEventListener("click", centerLatestPoint);
@@ -597,18 +1233,59 @@
         hasAutoFitted = false;
         loadTrack();
     });
+    customRangeEnabled?.addEventListener("change", () => {
+        hasAutoFitted = false;
+        loadTrack(true);
+    });
+    rangePresetHours?.addEventListener("change", () => {
+        updateRangeEndFromPreset();
+        if (customRangeEnabled?.checked) {
+            hasAutoFitted = false;
+            loadTrack(true);
+        }
+    });
+    rangeFromInput?.addEventListener("change", () => {
+        updateRangeEndFromPreset();
+        if (customRangeEnabled?.checked) {
+            hasAutoFitted = false;
+            loadTrack(true);
+        }
+    });
+    rangeToInput?.addEventListener("change", () => {
+        if (rangeAutoApply) {
+            rangeAutoApply.checked = false;
+        }
+        if (customRangeEnabled?.checked) {
+            hasAutoFitted = false;
+            loadTrack(true);
+        }
+    });
+    rangeAutoApply?.addEventListener("change", () => {
+        if (rangeAutoApply.checked) {
+            updateRangeEndFromPreset();
+        }
+    });
+    applyRangeBtn?.addEventListener("click", () => {
+        customRangeEnabled.checked = true;
+        updateRangeEndFromPreset(true);
+        hasAutoFitted = false;
+        loadTrack(true);
+    });
+    resetToNowBtn?.addEventListener("click", resetWindowToNow);
     refreshSelect.addEventListener("change", resetTimer);
 
+    map.on('dragstart', suppressAutoFocusForManualMapMove);
+    map.on('zoomstart', suppressAutoFocusForManualMapMove);
+
+    minutesSelect.value = String(initialMinutes);
+    rangePresetHours.value = String(initialRangeHours);
+    if (!initialUseCustomRange) {
+        updateRangeEndFromPreset();
+    }
     applyMapBrightness();
+    updateFullGpsDetailButton();
     loadTrack();
     resetTimer();
 </script>
-
-
-
-
-
-
-
 
 

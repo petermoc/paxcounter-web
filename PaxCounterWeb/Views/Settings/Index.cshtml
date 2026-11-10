@@ -5,14 +5,34 @@
     ViewData["Title"] = "Settings";
 }
 
-<h2>Display Settings</h2>
+<h2>Settings</h2>
 
 @if (TempData["SettingsSaved"] is string msg)
 {
     <div class="alert alert-success py-2">@msg</div>
 }
 
-<form method="post" asp-controller="Settings" asp-action="Index" class="card p-3">
+@if (TempData["HomeWifiError"] is string homeWifiError)
+{
+    <div class="alert alert-danger" role="alert">@homeWifiError</div>
+}
+
+<form method="post" asp-controller="Settings" asp-action="HomeWifi" class="card p-3 mb-4" id="home-wifi-settings">
+    @Html.AntiForgeryToken()
+    <h3 class="h5">Home Wi-Fi networks</h3>
+    <p class="text-muted">On these networks, Direct GPS uses the home interval with high accuracy off. Away from home, it resumes the faster interval.</p>
+    <div class="form-check mb-3">
+        <input class="form-check-input" type="checkbox" name="homeWifiEnabled" value="true" id="homeWifiEnabled" checked="@Model.AutoModeEnabled" />
+        <label class="form-check-label" for="homeWifiEnabled">Automatically use power-saving GPS at home</label>
+    </div>
+    <label class="form-label" for="homeWifiSsidsText">Wi-Fi names (SSID), one per line</label>
+    <textarea class="form-control" id="homeWifiSsidsText" name="homeWifiSsidsText" rows="5" maxlength="8192" spellcheck="false" aria-describedby="homeWifiHelp">@Model.HomeWifiSsidsText</textarea>
+    <div class="form-text" id="homeWifiHelp">Add more networks on new lines; remove a line to stop treating it as home. Names are case-sensitive. No Wi-Fi passwords are needed.</div>
+    <div class="small text-muted mt-2">HOME: @Model.AutoModeHomeIntervalSeconds s · AWAY: @Model.AutoModeAwayIntervalSeconds s. Changes apply to all phones on their next check.</div>
+    <div class="mt-3"><button type="submit" class="btn btn-primary">Save home networks</button></div>
+</form>
+
+<form method="post" asp-controller="Settings" asp-action="Index" class="card p-3 settings-form">
     @Html.AntiForgeryToken()
     <div class="mb-2 fw-semibold">GPS coordinate format</div>
     <div class="form-check">
@@ -21,16 +41,57 @@
     </div>
     <div class="form-check">
         <input class="form-check-input" type="radio" asp-for="GpsMode" value="@GpsDisplayMode.Dms" id="gpsModeDms" />
-        <label class="form-check-label" for="gpsModeDms">DMS only (46°05'26.3"N)</label>
+        <label class="form-check-label" for="gpsModeDms">DMS only (46°05'26.3&quot;N)</label>
     </div>
-    <div class="form-check mb-3">
+    <div class="form-check mb-4">
         <input class="form-check-input" type="radio" asp-for="GpsMode" value="@GpsDisplayMode.Both" id="gpsModeBoth" />
         <label class="form-check-label" for="gpsModeBoth">Both (decimal + DMS)</label>
     </div>
 
-    <div>
+    <div class="mb-2 fw-semibold">Phone GPS source</div>
+    <div class="form-check">
+        <input class="form-check-input" type="radio" asp-for="SelectedGpsPhone" value="A52" id="selectedGpsPhoneA52" />
+        <label class="form-check-label" for="selectedGpsPhoneA52">A52</label>
+    </div>
+    <div class="form-check mb-4">
+        <input class="form-check-input" type="radio" asp-for="SelectedGpsPhone" value="S23" id="selectedGpsPhoneS23" />
+        <label class="form-check-label" for="selectedGpsPhoneS23">S23</label>
+        <div class="form-text">This affects which Direct GPS phone receives the Force GPS request. Default is A52.</div>
+    </div>
+
+    <div class="mb-2 fw-semibold">OTA controls</div>
+    <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" asp-for="EnableRlimOtaControls" id="enableRlimOtaControls" />
+        <label class="form-check-label" for="enableRlimOtaControls">Enable RLIM OTA controls on Home page</label>
+    </div>
+    <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" asp-for="SyncPhoneGpsIntervalFromApp" id="syncPhoneGpsIntervalFromApp" />
+        <label class="form-check-label" for="syncPhoneGpsIntervalFromApp">When app interval changes, also sync phone GPS interval through Direct GPS</label>
+        <div class="form-text">The phone applies pending settings on its next HTTPS check, within 30 seconds when online.</div>
+    </div>
+    <div class="form-check mb-2">
+        <input class="form-check-input" type="checkbox" asp-for="ShowWifiCounts" id="showWifiCounts" />
+        <label class="form-check-label" for="showWifiCounts">Show WiFi counts in Home, Live and Footfall views</label>
+        <div class="form-text">Turn this off when you want BLE-only operator views and BLE-only PAX totals in footfall monitoring.</div>
+    </div>
+    <div class="form-check mb-4">
+        <input class="form-check-input" type="checkbox" asp-for="EnableBleScanOtaControls" id="enableBleScanOtaControls" />
+        <label class="form-check-label" for="enableBleScanOtaControls">Enable BLE scan OTA controls on Home page</label>
+        <div class="form-text">Use this when you want to widen or tighten BLE scan timing without reflashing firmware.</div>
+    </div>
+
+    <div class="mb-2 fw-semibold">Tracker GPS Auto Mode</div>
+    <div class="alert alert-secondary py-2 mb-4">
+        <div><strong>Status:</strong> @(Model.AutoModeEnabled ? "Enabled" : "Disabled")</div>
+        <div><strong>Direct GPS phone:</strong> @Model.AutoModeTrackerEntityId</div>
+        <div><strong>Home states:</strong> @Model.AutoModeHomeStatesText</div>
+        <div><strong>HOME behavior:</strong> @Model.AutoModeHomeIntervalSeconds s, high accuracy off</div>
+        <div><strong>AWAY behavior:</strong> @Model.AutoModeAwayIntervalSeconds s, high accuracy on</div>
+        <div class="form-text mt-2">Automatic mode uses configured home Wi-Fi networks or a home GPS zone. Phone settings are delivered directly over HTTPS.</div>
+    </div>
+
+    <div class="settings-actions sticky-bottom-actions">
         <button type="submit" class="btn btn-primary">Save</button>
         <a class="btn btn-outline-secondary" href="/">Back</a>
     </div>
 </form>
-
